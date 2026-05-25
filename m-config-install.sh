@@ -8,6 +8,12 @@ BREW_INSTALL_CMD='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/H
 OMZ_INSTALL_CMD='sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'
 CLT_TIMEOUT_SECONDS=1800
 CLT_POLL_INTERVAL_SECONDS=15
+NON_STOW_PACKAGES=(browser)
+CHROMIUM_BROWSER_APPS=(
+  "Helium|/Applications/Helium.app"
+  "Google Chrome|/Applications/Google Chrome.app"
+  "Microsoft Edge|/Applications/Microsoft Edge.app"
+)
 
 REPO_URL="${DOTFILES_REPO_URL:-${DEFAULT_REPO_URL}}"
 TARGET_DIR="${DOTFILES_DIR:-${DEFAULT_TARGET_DIR}}"
@@ -43,6 +49,44 @@ confirm() {
 require_sudo() {
   log "Requesting sudo for the next step."
   sudo -v
+}
+
+is_non_stow_package() {
+  local package_name="${1}"
+  local non_stow_package
+  for non_stow_package in "${NON_STOW_PACKAGES[@]}"; do
+    if [[ "${package_name}" == "${non_stow_package}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+discover_stow_packages() {
+  local dir
+  for dir in "${TARGET_DIR}"/*; do
+    [[ -d "${dir}" ]] || continue
+    local name
+    name="$(basename "${dir}")"
+    [[ "${name}" == .* ]] && continue
+    is_non_stow_package "${name}" && continue
+    printf '%s\n' "${name}"
+  done
+}
+
+script_path() {
+  printf '%s/scripts/scripts/%s\n' "${TARGET_DIR}" "${1}"
+}
+
+ensure_codium_on_path() {
+  if command -v codium >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local codium_bin_dir="/Applications/VSCodium.app/Contents/Resources/app/bin"
+  if [[ -x "${codium_bin_dir}/codium" ]]; then
+    export PATH="${codium_bin_dir}:${PATH}"
+  fi
 }
 
 parse_args() {
@@ -316,44 +360,149 @@ setup_node_runtime() {
     return 0
   fi
 
-  if ! brew list --versions nvm >/dev/null 2>&1; then
-    log "nvm is not installed."
-    if confirm "Install nvm with Homebrew now? [y/N] "; then
-      brew install nvm
+  if ! command -v mise >/dev/null 2>&1; then
+    log "mise is not installed."
+    if confirm "Install mise with Homebrew now? [y/N] "; then
+      brew install mise
     else
       log "Skipping Node runtime setup."
       return 0
     fi
   fi
 
-  local brew_prefix
-  local nvm_sh
-  brew_prefix="$(brew --prefix nvm 2>/dev/null || true)"
-  nvm_sh="${brew_prefix}/nvm.sh"
-  if [[ ! -s "${nvm_sh}" ]]; then
-    log "nvm.sh not found at ${nvm_sh}. Skipping Node runtime setup."
+  if ! command -v mise >/dev/null 2>&1; then
+    log "mise not found on PATH after install. Skipping Node runtime setup."
     return 0
   fi
 
-  export NVM_DIR="${NVM_DIR:-${HOME}/.nvm}"
-  mkdir -p "${NVM_DIR}"
-  # shellcheck disable=SC1090
-  . "${nvm_sh}"
-
-  if [[ "$(nvm version --lts 2>/dev/null || printf 'N/A')" == "N/A" ]]; then
-    log "Installing Node.js LTS with nvm."
-    nvm install --lts
-  fi
-
-  nvm alias default 'lts/*' >/dev/null
-  nvm use --lts >/dev/null
-
-  if command -v corepack >/dev/null 2>&1; then
-    corepack enable >/dev/null 2>&1 || true
-    log "Enabled corepack."
+  if confirm "Install Node.js LTS with mise and set it as the global default? [y/N] "; then
+    mise use --global node@lts
   else
-    log "corepack not found. Skipping corepack enable."
+    log "Skipping Node.js LTS install."
   fi
+
+  if confirm "Enable mise support for .nvmrc and .node-version files? [y/N] "; then
+    if ! mise settings add idiomatic_version_file_enable_tools node; then
+      log "Unable to update mise idiomatic Node version file setting. Continuing."
+    fi
+  else
+    log "Skipping mise idiomatic Node version file support."
+  fi
+}
+
+setup_app_defaults() {
+  local defaults_script
+  defaults_script="$(script_path "macos-set-default-apps.sh")"
+
+  if [[ ! -f "${defaults_script}" ]]; then
+    log "Default-app setup script not found at ${defaults_script}. Skipping."
+    return 0
+  fi
+
+  if ! command -v duti >/dev/null 2>&1; then
+    log "duti not found. Skipping default app setup."
+    return 0
+  fi
+
+  local required_apps=(
+    "/Applications/Helium.app"
+    "/Applications/Microsoft Edge.app"
+    "/Applications/WezTerm.app"
+  )
+  local missing_apps=()
+  local app_path
+  for app_path in "${required_apps[@]}"; do
+    if [[ ! -d "${app_path}" ]]; then
+      missing_apps+=("${app_path}")
+    fi
+  done
+
+  if [[ "${#missing_apps[@]}" -gt 0 ]]; then
+    log "Required app(s) not found for default app setup: ${missing_apps[*]}"
+    log "Skipping default app setup."
+    return 0
+  fi
+
+  if confirm "Set Helium as browser, Microsoft Edge as PDF reader, and WezTerm as terminal handler? [y/N] "; then
+    DOTFILES_DIR="${TARGET_DIR}" bash "${defaults_script}"
+  else
+    log "Skipping default app setup."
+  fi
+}
+
+install_vscodium_extensions() {
+  local extensions_script
+  extensions_script="$(script_path "vscodium-install-extensions.sh")"
+
+  if [[ ! -f "${extensions_script}" ]]; then
+    log "VSCodium extension installer not found at ${extensions_script}. Skipping."
+    return 0
+  fi
+
+  ensure_codium_on_path
+  if ! command -v codium >/dev/null 2>&1; then
+    log "codium command not found. Skipping VSCodium extension install."
+    return 0
+  fi
+
+  if confirm "Install VSCodium extensions from dotfiles? [y/N] "; then
+    DOTFILES_DIR="${TARGET_DIR}" bash "${extensions_script}"
+  else
+    log "Skipping VSCodium extension install."
+  fi
+}
+
+install_browser_extensions() {
+  local urls_file="${TARGET_DIR}/browser/extensions-urls.txt"
+  if [[ ! -f "${urls_file}" ]]; then
+    log "Browser extension URL list not found at ${urls_file}. Skipping browser extension setup."
+    return 0
+  fi
+
+  if ! command -v open >/dev/null 2>&1; then
+    log "macOS open command not found. Skipping browser extension setup."
+    return 0
+  fi
+
+  local installed_apps=()
+  local entry
+  for entry in "${CHROMIUM_BROWSER_APPS[@]}"; do
+    local app_path="${entry#*|}"
+    if [[ -d "${app_path}" ]]; then
+      installed_apps+=("${entry}")
+    fi
+  done
+
+  if [[ "${#installed_apps[@]}" -eq 0 ]]; then
+    log "No managed Chromium-family browser apps found. Skipping browser extension setup."
+    return 0
+  fi
+
+  local installed_labels=()
+  for entry in "${installed_apps[@]}"; do
+    installed_labels+=("${entry%%|*}")
+  done
+
+  log "Managed Chromium-family browser apps found: ${installed_labels[*]}"
+  if ! confirm "Open browser extension pages in each installed managed Chromium browser? [y/N] "; then
+    log "Skipping browser extension setup."
+    return 0
+  fi
+
+  for entry in "${installed_apps[@]}"; do
+    local label="${entry%%|*}"
+    local app_path="${entry#*|}"
+    local url=""
+    log "Opening browser extension pages in ${label}."
+    while IFS= read -r url || [[ -n "${url}" ]]; do
+      [[ -n "${url}" ]] || continue
+      [[ "${url}" == \#* ]] && continue
+      open -a "${app_path}" "${url}"
+      sleep 0.15
+    done < "${urls_file}"
+  done
+
+  log "Done opening browser extension pages. Install each extension manually from the opened tabs."
 }
 
 stow_packages() {
@@ -363,13 +512,16 @@ stow_packages() {
   fi
 
   local packages=()
-  local dir
-  for dir in "${TARGET_DIR}"/*; do
-    [[ -d "${dir}" ]] || continue
-    local name
-    name="$(basename "${dir}")"
-    [[ "${name}" == .* ]] && continue
-    packages+=("${name}")
+  local package
+  while IFS= read -r package; do
+    packages+=("${package}")
+  done < <(discover_stow_packages)
+
+  local skipped_packages=()
+  for package in "${NON_STOW_PACKAGES[@]}"; do
+    if [[ -d "${TARGET_DIR}/${package}" ]]; then
+      skipped_packages+=("${package}")
+    fi
   done
 
   if [[ "${#packages[@]}" -eq 0 ]]; then
@@ -377,17 +529,30 @@ stow_packages() {
     return 0
   fi
 
+  if [[ "${#skipped_packages[@]}" -gt 0 ]]; then
+    log "The following dotfiles data directories will not be stowed: ${skipped_packages[*]}"
+  fi
+
   log "The following packages will be stowed: ${packages[*]}"
   if confirm "Stow all packages into ${HOME}? [y/N] "; then
     local stow_args=(-d "${TARGET_DIR}" -t "${HOME}" "${packages[@]}")
     log "Running stow dry-run to detect conflicts."
     local dry_output
-    if ! dry_output="$(stow -n -v "${stow_args[@]}" 2>&1)"; then
-      log "Stow dry-run reported issues:"
-      printf '%s\n' "${dry_output}"
+    local dry_status=0
+    dry_output="$(stow -n -v "${stow_args[@]}" 2>&1)" || dry_status=$?
+
+    local has_conflicts=0
+    if printf '%s' "${dry_output}" | grep -E "existing target|CONFLICT" >/dev/null 2>&1; then
+      has_conflicts=1
     fi
 
-    if printf '%s' "${dry_output}" | grep -E "existing target|CONFLICT" >/dev/null 2>&1; then
+    if [[ "${dry_status}" -ne 0 && "${has_conflicts}" -eq 0 ]]; then
+      log "Stow dry-run failed without a recognized conflict. Skipping stow."
+      printf '%s\n' "${dry_output}"
+      return 0
+    fi
+
+    if [[ "${has_conflicts}" -eq 1 ]]; then
       log "Stow dry-run detected conflicts."
       printf '%s\n' "${dry_output}"
       if confirm "Move conflicting files to a backup directory and continue? [y/N] "; then
@@ -445,6 +610,9 @@ main() {
   install_brew_bundle
   setup_node_runtime
   stow_packages
+  setup_app_defaults
+  install_vscodium_extensions
+  install_browser_extensions
   log "Done."
 }
 

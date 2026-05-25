@@ -17,8 +17,11 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - installing Oh My Zsh (if missing)
 - installing zsh plugins (autosuggestions, completions)
 - running `brew bundle` against the dotfiles `Brewfile`
-- setting up Node LTS via `nvm` and enabling `corepack`
-- stowing all top-level non-hidden directories from dotfiles into `~` (including `scripts` and `images`)
+- setting up Node LTS via `mise`
+- stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser`
+- setting macOS default handlers for Helium, Microsoft Edge, and WezTerm
+- installing VSCodium extensions from the dotfiles extension list
+- opening browser extension install pages for installed managed Chromium-family browsers
 
 Every step is opt-in and prompts for confirmation.
 
@@ -64,9 +67,12 @@ Environment alternatives:
 - Performs CLT health checks before clone/Homebrew operations.
 - Requests `sudo` for Homebrew install, `brew bundle`, and `xcode-select` repair/switch actions when needed.
 - Runs a GNU Stow dry-run before applying changes.
+- Treats `browser` as automation data, not a stow package.
 - Optionally moves conflicting files into `~/.dotfiles-backup/<timestamp>/`.
+- Skips optional app setup cleanly when required tools or apps are not installed.
 
 ## Notes
 
 - Default repo target is `https://github.com/m-software-engineering/dotfiles.git`.
 - If `~/dotfiles` exists but is not a git repo, the script exits with an error.
+- Browser extension setup opens Chrome Web Store URLs from `browser/extensions-urls.txt`; each Chromium-family browser still requires manual extension confirmation.
