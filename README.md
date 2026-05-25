@@ -16,7 +16,7 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - installing Homebrew (if missing)
 - installing Oh My Zsh (if missing)
 - installing zsh plugins (autosuggestions, completions)
-- running `brew bundle` against the dotfiles `Brewfile`
+- running `brew bundle` against the dotfiles `Brewfile`, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
 - setting up Node LTS via `mise`
 - stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser`
 - setting macOS default handlers for Helium, Microsoft Edge, and WezTerm
@@ -59,6 +59,32 @@ Environment alternatives:
 
 - `DOTFILES_DIR`
 - `DOTFILES_REPO_URL`
+
+## Development
+
+Install the local harness tools with Homebrew:
+
+```bash
+brew bundle
+```
+
+Run the full verification suite:
+
+```bash
+make check
+```
+
+Useful focused targets:
+
+```bash
+make syntax       # bash -n over shell and Bats files
+make format-check # shfmt diff check
+make format       # rewrite shell formatting with shfmt
+make lint         # ShellCheck static analysis
+make test         # Bats test suite
+```
+
+The test suite lives in `test/`, uses Bats, and sources the installer without running `main`. The CI workflow runs the same `make check` target on macOS.
 
 ## Behavior and safeguards
 

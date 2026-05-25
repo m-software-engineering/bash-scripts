@@ -4,7 +4,9 @@ set -euo pipefail
 DEFAULT_REPO_URL="https://github.com/m-software-engineering/dotfiles.git"
 DEFAULT_TARGET_DIR="${HOME}/dotfiles"
 SAFE_CURL_URL="https://raw.githubusercontent.com/m-software-engineering/bash-scripts/refs/heads/main/m-config-install.sh"
+# shellcheck disable=SC2016
 BREW_INSTALL_CMD='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+# shellcheck disable=SC2016
 OMZ_INSTALL_CMD='sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'
 CLT_TIMEOUT_SECONDS=1800
 CLT_POLL_INTERVAL_SECONDS=15
@@ -14,12 +16,21 @@ CHROMIUM_BROWSER_APPS=(
   "Google Chrome|/Applications/Google Chrome.app"
   "Microsoft Edge|/Applications/Microsoft Edge.app"
 )
+BREW_BUNDLE_DEPRECATED_TAPS=(
+  homebrew/bundle
+  homebrew/cask
+  homebrew/cask-fonts
+  homebrew/core
+)
+BREW_BUNDLE_MIGRATED_FORMULAE_TO_CASKS=(
+  codex
+)
 
 REPO_URL="${DOTFILES_REPO_URL:-${DEFAULT_REPO_URL}}"
 TARGET_DIR="${DOTFILES_DIR:-${DEFAULT_TARGET_DIR}}"
 
 usage() {
-  cat <<EOF
+  cat << EOF
 Usage: m-config-install.sh [options]
 
 Options:
@@ -39,11 +50,37 @@ log() {
 
 confirm() {
   local prompt="${1:-Continue?}"
-  read -r -p "${prompt} [y/N] " reply
+  local reply
+  printf '%s [y/N] ' "${prompt}"
+  if ! read -r reply; then
+    printf '\n'
+    return 1
+  fi
   case "${reply}" in
-    [yY]|[yY][eE][sS]) return 0 ;;
+    [yY] | [yY][eE][sS]) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+contains_word() {
+  local words="${1}"
+  local needle="${2}"
+  case " ${words} " in
+    *" ${needle} "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+append_words() {
+  local words="${1}"
+  shift
+  local word
+  for word in "$@"; do
+    if ! contains_word "${words}" "${word}"; then
+      words="${words:+${words} }${word}"
+    fi
+  done
+  printf '%s\n' "${words}"
 }
 
 require_sudo() {
@@ -79,7 +116,7 @@ script_path() {
 }
 
 ensure_codium_on_path() {
-  if command -v codium >/dev/null 2>&1; then
+  if command -v codium > /dev/null 2>&1; then
     return 0
   fi
 
@@ -93,16 +130,22 @@ parse_args() {
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --dotfiles-dir)
-        [[ "$#" -ge 2 ]] || { printf 'Missing value for %s\n' "$1" >&2; exit 1; }
+        [[ "$#" -ge 2 ]] || {
+          printf 'Missing value for %s\n' "$1" >&2
+          exit 1
+        }
         TARGET_DIR="$2"
         shift 2
         ;;
       --repo-url)
-        [[ "$#" -ge 2 ]] || { printf 'Missing value for %s\n' "$1" >&2; exit 1; }
+        [[ "$#" -ge 2 ]] || {
+          printf 'Missing value for %s\n' "$1" >&2
+          exit 1
+        }
         REPO_URL="$2"
         shift 2
         ;;
-      -h|--help)
+      -h | --help)
         usage
         exit 0
         ;;
@@ -124,7 +167,7 @@ require_macos() {
 
 require_interactive_tty() {
   if [[ ! -t 0 || ! -t 1 ]]; then
-    cat <<EOF >&2
+    cat << EOF >&2
 This installer requires an interactive terminal (TTY).
 
 Do not run:
@@ -160,7 +203,7 @@ EOF
 }
 
 ensure_brew_on_path() {
-  if command -v brew >/dev/null 2>&1; then
+  if command -v brew > /dev/null 2>&1; then
     return 0
   fi
   if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -171,12 +214,12 @@ ensure_brew_on_path() {
 }
 
 has_clt() {
-  xcode-select -p >/dev/null 2>&1 && xcrun --find clang >/dev/null 2>&1
+  xcode-select -p > /dev/null 2>&1 && xcrun --find clang > /dev/null 2>&1
 }
 
 repair_developer_dir_if_broken() {
   local current_dir
-  current_dir="$(xcode-select -p 2>/dev/null || true)"
+  current_dir="$(xcode-select -p 2> /dev/null || true)"
 
   if [[ -n "${current_dir}" && -d "${current_dir}" ]]; then
     return 0
@@ -199,7 +242,7 @@ wait_for_clt_install() {
   local timeout_seconds="${1}"
   local elapsed=0
 
-  while (( elapsed < timeout_seconds )); do
+  while ((elapsed < timeout_seconds)); do
     if has_clt; then
       return 0
     fi
@@ -222,7 +265,7 @@ install_clt_if_missing() {
   fi
 
   log "Launching Xcode Command Line Tools installer."
-  if ! xcode-select --install >/dev/null 2>&1; then
+  if ! xcode-select --install > /dev/null 2>&1; then
     log "xcode-select --install returned a non-zero status. If the installer is already running, waiting for completion."
   fi
 
@@ -247,7 +290,7 @@ validate_clt() {
   log "Command Line Tools ready. Developer dir: ${dev_dir}"
   log "clang found at: ${clang_path}"
 
-  if ! git --version >/dev/null 2>&1; then
+  if ! git --version > /dev/null 2>&1; then
     log "git command not available after CLT setup."
     exit 1
   fi
@@ -278,7 +321,7 @@ clone_repo() {
 
 install_homebrew() {
   ensure_brew_on_path
-  if command -v brew >/dev/null 2>&1; then
+  if command -v brew > /dev/null 2>&1; then
     log "Homebrew already installed. Skipping."
     return 0
   fi
@@ -334,10 +377,38 @@ install_omz_plugins() {
   fi
 }
 
+brewfile_has_entry() {
+  local brewfile="${1}"
+  local type="${2}"
+  local name="${3}"
+  grep -E "^[[:space:]]*${type}[[:space:]]+\"${name}\"([[:space:],#]|$)" "${brewfile}" > /dev/null 2>&1
+}
+
+install_migrated_brew_casks() {
+  local brewfile="${1}"
+  if brewfile_has_entry "${brewfile}" brew codex && ! brewfile_has_entry "${brewfile}" cask codex; then
+    log "Installing codex as a Homebrew cask because the formula has migrated."
+    brew install --cask codex
+  fi
+}
+
+run_brew_bundle() {
+  local brewfile="${1}"
+  local tap_skip
+  local brew_skip
+
+  tap_skip="$(append_words "${HOMEBREW_BUNDLE_TAP_SKIP:-}" "${BREW_BUNDLE_DEPRECATED_TAPS[@]}")"
+  brew_skip="$(append_words "${HOMEBREW_BUNDLE_BREW_SKIP:-}" "${BREW_BUNDLE_MIGRATED_FORMULAE_TO_CASKS[@]}")"
+
+  log "Running brew bundle."
+  HOMEBREW_BUNDLE_TAP_SKIP="${tap_skip}" HOMEBREW_BUNDLE_BREW_SKIP="${brew_skip}" brew bundle --file "${brewfile}"
+  install_migrated_brew_casks "${brewfile}"
+}
+
 install_brew_bundle() {
   local brewfile="${TARGET_DIR}/Brewfile"
   ensure_brew_on_path
-  if ! command -v brew >/dev/null 2>&1; then
+  if ! command -v brew > /dev/null 2>&1; then
     log "Homebrew not found. Skipping Brewfile."
     return 0
   fi
@@ -347,7 +418,7 @@ install_brew_bundle() {
   fi
   if confirm "Install Brewfile packages from ${brewfile}?"; then
     require_sudo
-    brew bundle --file "${brewfile}"
+    run_brew_bundle "${brewfile}"
   else
     log "Skipping Brewfile install."
   fi
@@ -355,12 +426,12 @@ install_brew_bundle() {
 
 setup_node_runtime() {
   ensure_brew_on_path
-  if ! command -v brew >/dev/null 2>&1; then
+  if ! command -v brew > /dev/null 2>&1; then
     log "Homebrew not found. Skipping Node runtime setup."
     return 0
   fi
 
-  if ! command -v mise >/dev/null 2>&1; then
+  if ! command -v mise > /dev/null 2>&1; then
     log "mise is not installed."
     if confirm "Install mise with Homebrew now?"; then
       brew install mise
@@ -370,7 +441,7 @@ setup_node_runtime() {
     fi
   fi
 
-  if ! command -v mise >/dev/null 2>&1; then
+  if ! command -v mise > /dev/null 2>&1; then
     log "mise not found on PATH after install. Skipping Node runtime setup."
     return 0
   fi
@@ -399,7 +470,7 @@ setup_app_defaults() {
     return 0
   fi
 
-  if ! command -v duti >/dev/null 2>&1; then
+  if ! command -v duti > /dev/null 2>&1; then
     log "duti not found. Skipping default app setup."
     return 0
   fi
@@ -440,7 +511,7 @@ install_vscodium_extensions() {
   fi
 
   ensure_codium_on_path
-  if ! command -v codium >/dev/null 2>&1; then
+  if ! command -v codium > /dev/null 2>&1; then
     log "codium command not found. Skipping VSCodium extension install."
     return 0
   fi
@@ -459,7 +530,7 @@ install_browser_extensions() {
     return 0
   fi
 
-  if ! command -v open >/dev/null 2>&1; then
+  if ! command -v open > /dev/null 2>&1; then
     log "macOS open command not found. Skipping browser extension setup."
     return 0
   fi
@@ -506,7 +577,7 @@ install_browser_extensions() {
 }
 
 stow_packages() {
-  if ! command -v stow >/dev/null 2>&1; then
+  if ! command -v stow > /dev/null 2>&1; then
     log "GNU Stow not found. Skipping stow step."
     return 0
   fi
@@ -542,7 +613,7 @@ stow_packages() {
     dry_output="$(stow -n -v "${stow_args[@]}" 2>&1)" || dry_status=$?
 
     local has_conflicts=0
-    if printf '%s' "${dry_output}" | grep -E "existing target|CONFLICT" >/dev/null 2>&1; then
+    if printf '%s' "${dry_output}" | grep -E "existing target|CONFLICT" > /dev/null 2>&1; then
       has_conflicts=1
     fi
 
@@ -616,4 +687,6 @@ main() {
   log "Done."
 }
 
-main "$@"
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
