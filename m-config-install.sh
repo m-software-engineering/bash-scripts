@@ -38,8 +38,8 @@ log() {
 }
 
 confirm() {
-  local prompt="${1:-Continue?} [y/N] "
-  read -r -p "$prompt" reply
+  local prompt="${1:-Continue?}"
+  read -r -p "${prompt} [y/N] " reply
   case "${reply}" in
     [yY]|[yY][eE][sS]) return 0 ;;
     *) return 1 ;;
@@ -186,7 +186,7 @@ repair_developer_dir_if_broken() {
   fi
 
   log "Found Command Line Tools at /Library/Developer/CommandLineTools, but xcode-select is not pointing to a valid developer directory."
-  if confirm "Switch xcode-select to /Library/Developer/CommandLineTools? [y/N] "; then
+  if confirm "Switch xcode-select to /Library/Developer/CommandLineTools?"; then
     require_sudo
     sudo xcode-select --switch /Library/Developer/CommandLineTools
   else
@@ -216,7 +216,7 @@ install_clt_if_missing() {
   fi
 
   log "Xcode Command Line Tools are required for this installer."
-  if ! confirm "Install Xcode Command Line Tools now? [y/N] "; then
+  if ! confirm "Install Xcode Command Line Tools now?"; then
     log "Xcode Command Line Tools are required. Exiting."
     exit 1
   fi
@@ -269,7 +269,7 @@ clone_repo() {
     log "Path ${TARGET_DIR} exists but is not a git repo. Please move it aside."
     exit 1
   fi
-  if confirm "Clone dotfiles repo (${REPO_URL}) to ${TARGET_DIR}? [y/N] "; then
+  if confirm "Clone dotfiles repo (${REPO_URL}) to ${TARGET_DIR}?"; then
     git clone "${REPO_URL}" "${TARGET_DIR}"
   else
     log "Skipping clone."
@@ -282,7 +282,7 @@ install_homebrew() {
     log "Homebrew already installed. Skipping."
     return 0
   fi
-  if confirm "Install Homebrew? [y/N] "; then
+  if confirm "Install Homebrew?"; then
     require_sudo
     eval "${BREW_INSTALL_CMD}"
     ensure_brew_on_path
@@ -296,7 +296,7 @@ install_oh_my_zsh() {
     log "Oh-My-Zsh already installed. Skipping."
     return 0
   fi
-  if confirm "Install Oh-My-Zsh? [y/N] "; then
+  if confirm "Install Oh-My-Zsh?"; then
     RUNZSH=no CHSH=no KEEP_ZSHRC=yes eval "${OMZ_INSTALL_CMD}"
   else
     log "Skipping Oh-My-Zsh install."
@@ -316,7 +316,7 @@ install_omz_plugins() {
   if [[ -d "${autosuggest_dir}" ]]; then
     log "zsh-autosuggestions already installed. Skipping."
   else
-    if confirm "Install zsh-autosuggestions? [y/N] "; then
+    if confirm "Install zsh-autosuggestions?"; then
       git clone https://github.com/zsh-users/zsh-autosuggestions "${autosuggest_dir}"
     else
       log "Skipping zsh-autosuggestions."
@@ -326,7 +326,7 @@ install_omz_plugins() {
   if [[ -d "${completions_dir}" ]]; then
     log "zsh-completions already installed. Skipping."
   else
-    if confirm "Install zsh-completions? [y/N] "; then
+    if confirm "Install zsh-completions?"; then
       git clone https://github.com/zsh-users/zsh-completions.git "${completions_dir}"
     else
       log "Skipping zsh-completions."
@@ -345,7 +345,7 @@ install_brew_bundle() {
     log "Brewfile not found at ${brewfile}. Skipping."
     return 0
   fi
-  if confirm "Install Brewfile packages from ${brewfile}? [y/N] "; then
+  if confirm "Install Brewfile packages from ${brewfile}?"; then
     require_sudo
     brew bundle --file "${brewfile}"
   else
@@ -362,7 +362,7 @@ setup_node_runtime() {
 
   if ! command -v mise >/dev/null 2>&1; then
     log "mise is not installed."
-    if confirm "Install mise with Homebrew now? [y/N] "; then
+    if confirm "Install mise with Homebrew now?"; then
       brew install mise
     else
       log "Skipping Node runtime setup."
@@ -375,13 +375,13 @@ setup_node_runtime() {
     return 0
   fi
 
-  if confirm "Install Node.js LTS with mise and set it as the global default? [y/N] "; then
+  if confirm "Install Node.js LTS with mise and set it as the global default?"; then
     mise use --global node@lts
   else
     log "Skipping Node.js LTS install."
   fi
 
-  if confirm "Enable mise support for .nvmrc and .node-version files? [y/N] "; then
+  if confirm "Enable mise support for .nvmrc and .node-version files?"; then
     if ! mise settings add idiomatic_version_file_enable_tools node; then
       log "Unable to update mise idiomatic Node version file setting. Continuing."
     fi
@@ -423,7 +423,7 @@ setup_app_defaults() {
     return 0
   fi
 
-  if confirm "Set Helium as browser, Microsoft Edge as PDF reader, and WezTerm as terminal handler? [y/N] "; then
+  if confirm "Set Helium as browser, Microsoft Edge as PDF reader, and WezTerm as terminal handler?"; then
     DOTFILES_DIR="${TARGET_DIR}" bash "${defaults_script}"
   else
     log "Skipping default app setup."
@@ -445,7 +445,7 @@ install_vscodium_extensions() {
     return 0
   fi
 
-  if confirm "Install VSCodium extensions from dotfiles? [y/N] "; then
+  if confirm "Install VSCodium extensions from dotfiles?"; then
     DOTFILES_DIR="${TARGET_DIR}" bash "${extensions_script}"
   else
     log "Skipping VSCodium extension install."
@@ -484,7 +484,7 @@ install_browser_extensions() {
   done
 
   log "Managed Chromium-family browser apps found: ${installed_labels[*]}"
-  if ! confirm "Open browser extension pages in each installed managed Chromium browser? [y/N] "; then
+  if ! confirm "Open browser extension pages in each installed managed Chromium browser?"; then
     log "Skipping browser extension setup."
     return 0
   fi
@@ -534,7 +534,7 @@ stow_packages() {
   fi
 
   log "The following packages will be stowed: ${packages[*]}"
-  if confirm "Stow all packages into ${HOME}? [y/N] "; then
+  if confirm "Stow all packages into ${HOME}?"; then
     local stow_args=(-d "${TARGET_DIR}" -t "${HOME}" "${packages[@]}")
     log "Running stow dry-run to detect conflicts."
     local dry_output
@@ -555,7 +555,7 @@ stow_packages() {
     if [[ "${has_conflicts}" -eq 1 ]]; then
       log "Stow dry-run detected conflicts."
       printf '%s\n' "${dry_output}"
-      if confirm "Move conflicting files to a backup directory and continue? [y/N] "; then
+      if confirm "Move conflicting files to a backup directory and continue?"; then
         local timestamp
         timestamp="$(date +%Y%m%d-%H%M%S)"
         local pkg
@@ -585,7 +585,7 @@ stow_packages() {
     fi
 
     log "Dry-run looks clean."
-    if confirm "Proceed with stow? [y/N] "; then
+    if confirm "Proceed with stow?"; then
       stow -v "${stow_args[@]}"
     else
       log "Skipping stow."
