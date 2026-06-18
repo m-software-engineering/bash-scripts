@@ -19,6 +19,7 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - running `brew bundle` against the dotfiles `Brewfile`, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
 - setting up Node LTS via `mise`
 - stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser`
+- optionally applying the dotfiles macOS performance and appearance profile
 - setting macOS default handlers for Helium, Microsoft Edge, and WezTerm
 - installing VSCodium extensions from the dotfiles extension list
 - opening browser extension install pages for installed managed Chromium-family browsers
@@ -95,6 +96,7 @@ The test suite lives in `test/`, uses Bats, and sources the installer without ru
 - Runs a GNU Stow dry-run before applying changes.
 - Treats `browser` as automation data, not a stow package.
 - Optionally moves conflicting files into `~/.dotfiles-backup/<timestamp>/`.
+- Prompts before applying macOS performance and appearance defaults.
 - Skips optional app setup cleanly when required tools or apps are not installed.
 
 ## Notes

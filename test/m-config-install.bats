@@ -68,6 +68,68 @@ function script_path_resolves_dotfiles_script_package_paths { #@test
   [ "${output}" = "${TEST_HOME}/dotfiles/scripts/scripts/macos-set-default-apps.sh" ]
 }
 
+function script_path_resolves_macos_performance_beauty_script { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run script_path "macos-performance-beauty.sh"
+
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "${TEST_HOME}/dotfiles/scripts/scripts/macos-performance-beauty.sh" ]
+}
+
+function setup_macos_performance_beauty_skips_when_script_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run setup_macos_performance_beauty
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"macOS performance and appearance script not found"* ]]
+}
+
+function setup_macos_performance_beauty_runs_after_confirmation { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local scripts_dir="${TARGET_DIR}/scripts/scripts"
+  local call_log="${BATS_TEST_TMPDIR}/macos-tuning.log"
+  mkdir -p "${scripts_dir}"
+
+  cat > "${scripts_dir}/macos-performance-beauty.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'DOTFILES_DIR=%s\n' "${DOTFILES_DIR:-}" > "${MACOS_TUNING_CALL_LOG}"
+printf 'args=%s\n' "$*" >> "${MACOS_TUNING_CALL_LOG}"
+EOF
+  chmod +x "${scripts_dir}/macos-performance-beauty.sh"
+
+  export MACOS_TUNING_CALL_LOG="${call_log}"
+  run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | setup_macos_performance_beauty' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Apply macOS performance and appearance defaults from dotfiles? [y/N]"* ]]
+  [[ "$(cat "${call_log}")" == *"DOTFILES_DIR=${TARGET_DIR}"* ]]
+  [[ "$(cat "${call_log}")" == *"args="* ]]
+}
+
+function setup_macos_performance_beauty_declines_cleanly { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local scripts_dir="${TARGET_DIR}/scripts/scripts"
+  local call_log="${BATS_TEST_TMPDIR}/macos-tuning.log"
+  mkdir -p "${scripts_dir}"
+
+  cat > "${scripts_dir}/macos-performance-beauty.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' > "${MACOS_TUNING_CALL_LOG}"
+EOF
+  chmod +x "${scripts_dir}/macos-performance-beauty.sh"
+
+  export MACOS_TUNING_CALL_LOG="${call_log}"
+  run bash -c 'source "$1"; TARGET_DIR="$2"; printf "n\n" | setup_macos_performance_beauty' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping macOS performance and appearance defaults."* ]]
+  [ ! -f "${call_log}" ]
+}
+
 function discover_stow_packages_skips_hidden_and_non_stow_directories { #@test
   TARGET_DIR="${TEST_HOME}/dotfiles"
   mkdir -p "${TARGET_DIR}/browser" "${TARGET_DIR}/git" "${TARGET_DIR}/zsh" "${TARGET_DIR}/.hidden"

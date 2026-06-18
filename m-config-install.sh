@@ -501,6 +501,23 @@ setup_app_defaults() {
   fi
 }
 
+# Offer the dotfiles macOS tuning profile without making personal UI changes mandatory.
+setup_macos_performance_beauty() {
+  local tuning_script
+  tuning_script="$(script_path "macos-performance-beauty.sh")"
+
+  if [[ ! -f "${tuning_script}" ]]; then
+    log "macOS performance and appearance script not found at ${tuning_script}. Skipping."
+    return 0
+  fi
+
+  if confirm "Apply macOS performance and appearance defaults from dotfiles?"; then
+    DOTFILES_DIR="${TARGET_DIR}" bash "${tuning_script}"
+  else
+    log "Skipping macOS performance and appearance defaults."
+  fi
+}
+
 install_vscodium_extensions() {
   local extensions_script
   extensions_script="$(script_path "vscodium-install-extensions.sh")"
@@ -681,6 +698,7 @@ main() {
   install_brew_bundle
   setup_node_runtime
   stow_packages
+  setup_macos_performance_beauty
   setup_app_defaults
   install_vscodium_extensions
   install_browser_extensions
