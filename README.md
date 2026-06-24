@@ -16,9 +16,11 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - installing Homebrew (if missing)
 - installing Oh My Zsh (if missing)
 - installing zsh plugins (autosuggestions, completions)
-- running `brew bundle` against the dotfiles `Brewfile`, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
+- running `brew bundle` against the dotfiles Homebrew package Brewfile, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
 - setting up Node LTS via `mise`
 - stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser`
+- optionally enabling the dotfiles daily Homebrew maintenance LaunchAgent after stowing
+- installing secure SSH client defaults from the dotfiles `ssh` package when stow is enabled
 - optionally applying the dotfiles macOS performance and appearance profile
 - setting macOS default handlers for Helium, Microsoft Edge, and WezTerm
 - installing VSCodium extensions from the dotfiles extension list
@@ -93,9 +95,11 @@ The test suite lives in `test/`, uses Bats, and sources the installer without ru
 - Fails fast if run without a TTY (prevents broken prompt behavior from `curl ... | bash`).
 - Performs CLT health checks before clone/Homebrew operations.
 - Requests `sudo` for Homebrew install, `brew bundle`, and `xcode-select` repair/switch actions when needed.
-- Runs a GNU Stow dry-run before applying changes.
-- Treats `browser` as automation data, not a stow package.
-- Optionally moves conflicting files into `~/.dotfiles-backup/<timestamp>/`.
+- Resolves the canonical Brewfile at `homebrew/.config/homebrew/Brewfile`, with fallback support for older clones that still use a top-level `Brewfile`.
+- Runs a GNU Stow dry-run before applying changes and ignores macOS metadata files such as `.DS_Store`.
+- Treats `browser` as automation data, not a stow package; `homebrew` and `ssh` are normal stow packages.
+- Optionally moves conflicting files and symlinks into `~/.dotfiles-backup/<timestamp>/`.
+- Prompts before loading the daily Homebrew maintenance LaunchAgent from the stowed `homebrew` package.
 - Prompts before applying macOS performance and appearance defaults.
 - Skips optional app setup cleanly when required tools or apps are not installed.
 

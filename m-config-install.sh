@@ -11,6 +11,11 @@ OMZ_INSTALL_CMD='sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/o
 CLT_TIMEOUT_SECONDS=1800
 CLT_POLL_INTERVAL_SECONDS=15
 NON_STOW_PACKAGES=(browser)
+STOW_IGNORE_PATTERNS=(
+  "\\.DS_Store$"
+  "\\._[^/]+$"
+)
+HOMEBREW_MAINTENANCE_LABEL="com.m-software-engineering.homebrew-maintenance"
 CHROMIUM_BROWSER_APPS=(
   "Helium|/Applications/Helium.app"
   "Google Chrome|/Applications/Google Chrome.app"
@@ -83,6 +88,18 @@ append_words() {
   printf '%s\n' "${words}"
 }
 
+array_contains() {
+  local needle="${1}"
+  shift
+  local item
+  for item in "$@"; do
+    if [[ "${item}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 require_sudo() {
   log "Requesting sudo for the next step."
   sudo -v
@@ -113,6 +130,31 @@ discover_stow_packages() {
 
 script_path() {
   printf '%s/scripts/scripts/%s\n' "${TARGET_DIR}" "${1}"
+}
+
+brewfile_path() {
+  local canonical_brewfile="${TARGET_DIR}/homebrew/.config/homebrew/Brewfile"
+  local legacy_brewfile="${TARGET_DIR}/Brewfile"
+
+  if [[ -f "${canonical_brewfile}" ]]; then
+    printf '%s\n' "${canonical_brewfile}"
+    return 0
+  fi
+
+  if [[ -f "${legacy_brewfile}" ]]; then
+    printf '%s\n' "${legacy_brewfile}"
+    return 0
+  fi
+
+  return 1
+}
+
+homebrew_maintenance_plist_path() {
+  printf '%s/Library/LaunchAgents/%s.plist\n' "${HOME}" "${HOMEBREW_MAINTENANCE_LABEL}"
+}
+
+homebrew_maintenance_script_path() {
+  printf '%s/.config/homebrew/homebrew-maintenance.sh\n' "${HOME}"
 }
 
 ensure_codium_on_path() {
@@ -406,14 +448,14 @@ run_brew_bundle() {
 }
 
 install_brew_bundle() {
-  local brewfile="${TARGET_DIR}/Brewfile"
+  local brewfile=""
   ensure_brew_on_path
   if ! command -v brew > /dev/null 2>&1; then
     log "Homebrew not found. Skipping Brewfile."
     return 0
   fi
-  if [[ ! -f "${brewfile}" ]]; then
-    log "Brewfile not found at ${brewfile}. Skipping."
+  if ! brewfile="$(brewfile_path)"; then
+    log "Brewfile not found at ${TARGET_DIR}/homebrew/.config/homebrew/Brewfile or ${TARGET_DIR}/Brewfile. Skipping."
     return 0
   fi
   if confirm "Install Brewfile packages from ${brewfile}?"; then
@@ -421,6 +463,50 @@ install_brew_bundle() {
     run_brew_bundle "${brewfile}"
   else
     log "Skipping Brewfile install."
+  fi
+}
+
+is_homebrew_maintenance_loaded() {
+  if ! command -v launchctl > /dev/null 2>&1; then
+    return 1
+  fi
+
+  launchctl print "gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL}" > /dev/null 2>&1
+}
+
+setup_homebrew_maintenance() {
+  local plist_path
+  local script_path
+  plist_path="$(homebrew_maintenance_plist_path)"
+  script_path="$(homebrew_maintenance_script_path)"
+
+  if [[ ! -f "${plist_path}" || ! -f "${script_path}" ]]; then
+    log "Homebrew maintenance LaunchAgent or script not found. Skipping scheduled Homebrew maintenance setup."
+    return 0
+  fi
+
+  if ! command -v launchctl > /dev/null 2>&1; then
+    log "launchctl not found. Skipping scheduled Homebrew maintenance setup."
+    return 0
+  fi
+
+  if is_homebrew_maintenance_loaded; then
+    log "Homebrew maintenance LaunchAgent is already loaded."
+    return 0
+  fi
+
+  if confirm "Enable daily Homebrew maintenance LaunchAgent?"; then
+    if ! launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
+      log "Unable to bootstrap Homebrew maintenance LaunchAgent. Continuing."
+      return 0
+    fi
+
+    if ! launchctl enable "gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL}"; then
+      log "Unable to enable Homebrew maintenance LaunchAgent. Continuing."
+      return 0
+    fi
+  else
+    log "Skipping scheduled Homebrew maintenance setup."
   fi
 }
 
@@ -593,6 +679,59 @@ install_browser_extensions() {
   log "Done opening browser extension pages. Install each extension manually from the opened tabs."
 }
 
+extract_stow_conflict_targets() {
+  local line
+  local rel
+
+  while IFS= read -r line; do
+    rel=""
+    if [[ "${line}" == *"existing target is not owned by stow: "* ]]; then
+      rel="${line##*existing target is not owned by stow: }"
+    elif [[ "${line}" == *" over existing target "* ]]; then
+      rel="${line#* over existing target }"
+      rel="${rel%% since *}"
+    fi
+
+    if [[ -n "${rel}" ]]; then
+      printf '%s\n' "${rel#./}"
+    fi
+  done
+}
+
+backup_stow_conflicts() {
+  local dry_output="${1}"
+  local backup_dir="${2}"
+  local conflict_targets=()
+  local rel
+
+  while IFS= read -r rel; do
+    [[ -n "${rel}" ]] || continue
+    if [[ "${#conflict_targets[@]}" -eq 0 ]] || ! array_contains "${rel}" "${conflict_targets[@]}"; then
+      conflict_targets+=("${rel}")
+    fi
+  done < <(printf '%s\n' "${dry_output}" | extract_stow_conflict_targets)
+
+  if [[ "${#conflict_targets[@]}" -eq 0 ]]; then
+    log "No specific stow conflict targets could be parsed. Skipping backup."
+    return 1
+  fi
+
+  mkdir -p "${backup_dir}"
+  for rel in "${conflict_targets[@]}"; do
+    if [[ "${rel}" == /* || "${rel}" == ".." || "${rel}" == ../* || "${rel}" == */../* ]]; then
+      log "Skipping unsafe conflict path from stow output: ${rel}"
+      continue
+    fi
+
+    local dest="${HOME}/${rel}"
+    if [[ -e "${dest}" || -L "${dest}" ]]; then
+      mkdir -p "${backup_dir}/$(dirname "${rel}")"
+      mv "${dest}" "${backup_dir}/${rel}"
+      log "Moved ${dest} to ${backup_dir}/${rel}."
+    fi
+  done
+}
+
 stow_packages() {
   if ! command -v stow > /dev/null 2>&1; then
     log "GNU Stow not found. Skipping stow step."
@@ -623,7 +762,12 @@ stow_packages() {
 
   log "The following packages will be stowed: ${packages[*]}"
   if confirm "Stow all packages into ${HOME}?"; then
-    local stow_args=(-d "${TARGET_DIR}" -t "${HOME}" "${packages[@]}")
+    local stow_args=(-d "${TARGET_DIR}" -t "${HOME}")
+    local ignore_pattern
+    for ignore_pattern in "${STOW_IGNORE_PATTERNS[@]}"; do
+      stow_args+=(--ignore="${ignore_pattern}")
+    done
+    stow_args+=("${packages[@]}")
     log "Running stow dry-run to detect conflicts."
     local dry_output
     local dry_status=0
@@ -646,26 +790,11 @@ stow_packages() {
       if confirm "Move conflicting files to a backup directory and continue?"; then
         local timestamp
         timestamp="$(date +%Y%m%d-%H%M%S)"
-        local pkg
-        for pkg in "${packages[@]}"; do
-          local pkg_dir="${TARGET_DIR}/${pkg}"
-          local backup_dir="${HOME}/.dotfiles-backup/${timestamp}/${pkg}"
-          if [[ -d "${pkg_dir}" ]]; then
-            log "Backing up conflicts for package ${pkg}."
-            mkdir -p "${backup_dir}"
-            (
-              cd "${pkg_dir}"
-              find . \( -type f -o -type l \) | sed 's|^\./||' | while read -r rel; do
-                local dest="${HOME}/${rel}"
-                if [[ -e "${dest}" && ! -L "${dest}" ]]; then
-                  mkdir -p "${backup_dir}/$(dirname "${rel}")"
-                  mv "${dest}" "${backup_dir}/${rel}"
-                fi
-              done
-            )
-          fi
-        done
-        stow -v "${stow_args[@]}"
+        if backup_stow_conflicts "${dry_output}" "${HOME}/.dotfiles-backup/${timestamp}"; then
+          stow -v "${stow_args[@]}"
+        else
+          log "Skipping stow because conflicts could not be backed up safely."
+        fi
       else
         log "Skipping stow due to conflicts."
       fi
@@ -698,6 +827,7 @@ main() {
   install_brew_bundle
   setup_node_runtime
   stow_packages
+  setup_homebrew_maintenance
   setup_macos_performance_beauty
   setup_app_defaults
   install_vscodium_extensions
