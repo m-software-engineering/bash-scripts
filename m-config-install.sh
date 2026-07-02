@@ -604,6 +604,7 @@ setup_macos_performance_beauty() {
   fi
 }
 
+# Runs the dotfiles extension synchronizer after validating prerequisites and consent.
 install_vscodium_extensions() {
   local extensions_script
   extensions_script="$(script_path "vscodium-install-extensions.sh")"
@@ -619,7 +620,7 @@ install_vscodium_extensions() {
     return 0
   fi
 
-  if confirm "Install VSCodium extensions from dotfiles?"; then
+  if confirm "Install missing VSCodium extensions from dotfiles?"; then
     DOTFILES_DIR="${TARGET_DIR}" bash "${extensions_script}"
   else
     log "Skipping VSCodium extension install."

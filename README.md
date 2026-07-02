@@ -23,7 +23,7 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - installing secure SSH client defaults from the dotfiles `ssh` package when stow is enabled
 - optionally applying the dotfiles macOS performance and appearance profile
 - setting macOS default handlers for Helium, Microsoft Edge, and WezTerm
-- installing VSCodium extensions from the dotfiles extension list
+- installing missing VSCodium extensions from the dotfiles extension list without removing user-added extensions
 - opening browser extension install pages for installed managed Chromium-family browsers
 
 Every step is opt-in and prompts for confirmation.
