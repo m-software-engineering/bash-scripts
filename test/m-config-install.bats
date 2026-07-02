@@ -184,6 +184,91 @@ EOF
   [ ! -f "${call_log}" ]
 }
 
+function install_vscodium_extensions_skips_when_script_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run install_vscodium_extensions
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"VSCodium extension installer not found"* ]]
+}
+
+function install_vscodium_extensions_skips_when_codium_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  mkdir -p "${TARGET_DIR}/scripts/scripts"
+  touch "${TARGET_DIR}/scripts/scripts/vscodium-install-extensions.sh"
+
+  PATH="/usr/bin:/bin" run bash -c '
+    source "$1"
+    ensure_codium_on_path() { return 0; }
+    TARGET_DIR="$2"
+    install_vscodium_extensions
+  ' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"codium command not found. Skipping"* ]]
+}
+
+function install_vscodium_extensions_declines_cleanly { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local extensions_script="${DOTFILES_DIR}/scripts/scripts/vscodium-install-extensions.sh"
+  local call_log="${BATS_TEST_TMPDIR}/vscodium.log"
+  mkdir -p "${bin_dir}" "$(dirname "${extensions_script}")"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${bin_dir}/codium"
+  chmod +x "${bin_dir}/codium"
+  cat > "${extensions_script}" << 'EOF'
+#!/usr/bin/env bash
+printf 'called\n' >"${VSCODIUM_CALL_LOG}"
+EOF
+  export VSCODIUM_CALL_LOG="${call_log}"
+
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "n\n" | install_vscodium_extensions' _ "${INSTALLER}" "${DOTFILES_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Install missing VSCodium extensions from dotfiles? [y/N]"* ]]
+  [[ "${output}" == *"Skipping VSCodium extension install."* ]]
+  [ ! -f "${call_log}" ]
+}
+
+function install_vscodium_extensions_forwards_target_and_supports_repeat_runs { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local extensions_script="${DOTFILES_DIR}/scripts/scripts/vscodium-install-extensions.sh"
+  local call_log="${BATS_TEST_TMPDIR}/vscodium.log"
+  mkdir -p "${bin_dir}" "$(dirname "${extensions_script}")"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${bin_dir}/codium"
+  chmod +x "${bin_dir}/codium"
+  cat > "${extensions_script}" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'DOTFILES_DIR=%s\n' "${DOTFILES_DIR:-}" >>"${VSCODIUM_CALL_LOG}"
+EOF
+  export VSCODIUM_CALL_LOG="${call_log}"
+
+  PATH="${bin_dir}:${PATH}" run bash -c '
+    source "$1"
+    TARGET_DIR="$2"
+    printf "y\n" | install_vscodium_extensions
+    printf "y\n" | install_vscodium_extensions
+  ' _ "${INSTALLER}" "${DOTFILES_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [ "$(wc -l < "${call_log}" | tr -d ' ')" -eq 2 ]
+  [ "$(sort -u "${call_log}")" = "DOTFILES_DIR=${DOTFILES_DIR}" ]
+}
+
+function install_vscodium_extensions_propagates_child_failures { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local extensions_script="${DOTFILES_DIR}/scripts/scripts/vscodium-install-extensions.sh"
+  mkdir -p "${bin_dir}" "$(dirname "${extensions_script}")"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${bin_dir}/codium"
+  chmod +x "${bin_dir}/codium"
+  printf '#!/usr/bin/env bash\nexit 7\n' > "${extensions_script}"
+
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | install_vscodium_extensions' _ "${INSTALLER}" "${DOTFILES_DIR}"
+
+  [ "${status}" -eq 7 ]
+}
+
 function setup_homebrew_maintenance_skips_when_files_are_missing { #@test
   run setup_homebrew_maintenance
 
