@@ -18,7 +18,8 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - installing zsh plugins (autosuggestions, completions)
 - running `brew bundle` against the dotfiles Homebrew package Brewfile, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
 - setting up Node LTS via `mise`
-- stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser`
+- stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser` and `test`
+- optionally bootstrapping LazyVim plugins after the `nvim` package is stowed
 - optionally enabling the dotfiles daily Homebrew maintenance LaunchAgent after stowing
 - installing secure SSH client defaults from the dotfiles `ssh` package when stow is enabled
 - optionally applying the dotfiles macOS performance and appearance profile
@@ -97,7 +98,8 @@ The test suite lives in `test/`, uses Bats, and sources the installer without ru
 - Requests `sudo` for Homebrew install, `brew bundle`, and `xcode-select` repair/switch actions when needed.
 - Resolves the canonical Brewfile at `homebrew/.config/homebrew/Brewfile`, with fallback support for older clones that still use a top-level `Brewfile`.
 - Runs a GNU Stow dry-run before applying changes and ignores macOS metadata files such as `.DS_Store`.
-- Treats `browser` as automation data, not a stow package; `homebrew` and `ssh` are normal stow packages.
+- Treats `browser` and `test` as automation data, not stow packages; `nvim`, `homebrew`, and `ssh` are normal stow packages.
+- Prompts before bootstrapping LazyVim plugins with `nvim --headless "+Lazy! sync" +qa` when `nvim` and `~/.config/nvim/lua/config/lazy.lua` are present.
 - Optionally moves conflicting files and symlinks into `~/.dotfiles-backup/<timestamp>/`.
 - Prompts before loading the daily Homebrew maintenance LaunchAgent from the stowed `homebrew` package.
 - Prompts before applying macOS performance and appearance defaults.

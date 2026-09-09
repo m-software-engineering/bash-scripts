@@ -10,7 +10,7 @@ BREW_INSTALL_CMD='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/H
 OMZ_INSTALL_CMD='sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'
 CLT_TIMEOUT_SECONDS=1800
 CLT_POLL_INTERVAL_SECONDS=15
-NON_STOW_PACKAGES=(browser)
+NON_STOW_PACKAGES=(browser test)
 STOW_IGNORE_PATTERNS=(
   "\\.DS_Store$"
   "\\._[^/]+$"
@@ -604,6 +604,31 @@ setup_macos_performance_beauty() {
   fi
 }
 
+# Downloads LazyVim plugins after the nvim package has been stowed.
+bootstrap_neovim() {
+  if ! command -v nvim > /dev/null 2>&1; then
+    log "nvim not found. Skipping LazyVim plugin bootstrap."
+    return 0
+  fi
+
+  local lazy_spec="${HOME}/.config/nvim/lua/config/lazy.lua"
+  if [[ ! -f "${lazy_spec}" ]]; then
+    log "LazyVim spec not found at ${lazy_spec}. Skipping LazyVim plugin bootstrap."
+    return 0
+  fi
+
+  if confirm "Bootstrap LazyVim plugins now? This downloads plugin sources and can take several minutes."; then
+    log "Syncing LazyVim plugins."
+    if nvim --headless "+Lazy! sync" +qa; then
+      log "LazyVim plugins synced."
+    else
+      log "LazyVim plugin bootstrap failed. Run nvim once to finish installation."
+    fi
+  else
+    log "Skipping LazyVim plugin bootstrap."
+  fi
+}
+
 # Runs the dotfiles extension synchronizer after validating prerequisites and consent.
 install_vscodium_extensions() {
   local extensions_script
@@ -828,6 +853,7 @@ main() {
   install_brew_bundle
   setup_node_runtime
   stow_packages
+  bootstrap_neovim
   setup_homebrew_maintenance
   setup_macos_performance_beauty
   setup_app_defaults

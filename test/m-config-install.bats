@@ -184,6 +184,77 @@ EOF
   [ ! -f "${call_log}" ]
 }
 
+function bootstrap_neovim_skips_when_nvim_is_missing { #@test
+  PATH="/usr/bin:/bin" run bootstrap_neovim
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"nvim not found. Skipping LazyVim plugin bootstrap."* ]]
+}
+
+function bootstrap_neovim_skips_when_lazyvim_spec_is_missing { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  mkdir -p "${bin_dir}"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${bin_dir}/nvim"
+  chmod +x "${bin_dir}/nvim"
+
+  PATH="${bin_dir}:${PATH}" run bootstrap_neovim
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"LazyVim spec not found"* ]]
+}
+
+function bootstrap_neovim_declines_cleanly { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local nvim_log="${BATS_TEST_TMPDIR}/nvim.log"
+  mkdir -p "${bin_dir}" "${HOME}/.config/nvim/lua/config"
+  cat > "${bin_dir}/nvim" << 'EOF'
+#!/usr/bin/env bash
+printf 'called\n' >>"${NVIM_CALL_LOG}"
+EOF
+  chmod +x "${bin_dir}/nvim"
+  printf 'return {}\n' > "${HOME}/.config/nvim/lua/config/lazy.lua"
+  export NVIM_CALL_LOG="${nvim_log}"
+
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "n\n" | bootstrap_neovim' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping LazyVim plugin bootstrap."* ]]
+  [ ! -f "${nvim_log}" ]
+}
+
+function bootstrap_neovim_syncs_after_confirmation { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local nvim_log="${BATS_TEST_TMPDIR}/nvim.log"
+  mkdir -p "${bin_dir}" "${HOME}/.config/nvim/lua/config"
+  cat > "${bin_dir}/nvim" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args=%s\n' "$*" >>"${NVIM_CALL_LOG}"
+EOF
+  chmod +x "${bin_dir}/nvim"
+  printf 'return {}\n' > "${HOME}/.config/nvim/lua/config/lazy.lua"
+  export NVIM_CALL_LOG="${nvim_log}"
+
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "y\n" | bootstrap_neovim' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"LazyVim plugins synced."* ]]
+  [ "$(cat "${nvim_log}")" = "args=--headless +Lazy! sync +qa" ]
+}
+
+function bootstrap_neovim_continues_when_sync_fails { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  mkdir -p "${bin_dir}" "${HOME}/.config/nvim/lua/config"
+  printf '#!/usr/bin/env bash\nexit 9\n' > "${bin_dir}/nvim"
+  chmod +x "${bin_dir}/nvim"
+  printf 'return {}\n' > "${HOME}/.config/nvim/lua/config/lazy.lua"
+
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "y\n" | bootstrap_neovim' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"LazyVim plugin bootstrap failed."* ]]
+}
+
 function install_vscodium_extensions_skips_when_script_is_missing { #@test
   TARGET_DIR="${TEST_HOME}/dotfiles"
 
@@ -359,15 +430,16 @@ EOF
 
 function discover_stow_packages_skips_hidden_and_non_stow_directories { #@test
   TARGET_DIR="${TEST_HOME}/dotfiles"
-  mkdir -p "${TARGET_DIR}/browser" "${TARGET_DIR}/git" "${TARGET_DIR}/zsh" "${TARGET_DIR}/.hidden"
+  mkdir -p "${TARGET_DIR}/browser" "${TARGET_DIR}/test" "${TARGET_DIR}/git" "${TARGET_DIR}/nvim" "${TARGET_DIR}/zsh" "${TARGET_DIR}/.hidden"
   touch "${TARGET_DIR}/README.md"
 
   run discover_stow_packages
 
   [ "${status}" -eq 0 ]
   [ "${lines[0]}" = "git" ]
-  [ "${lines[1]}" = "zsh" ]
-  [ "${#lines[@]}" -eq 2 ]
+  [ "${lines[1]}" = "nvim" ]
+  [ "${lines[2]}" = "zsh" ]
+  [ "${#lines[@]}" -eq 3 ]
 }
 
 function require_interactive_tty_fails_without_tty { #@test
