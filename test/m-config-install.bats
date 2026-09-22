@@ -77,6 +77,100 @@ function script_path_resolves_macos_performance_beauty_script { #@test
   [ "${output}" = "${TEST_HOME}/dotfiles/scripts/scripts/macos-performance-beauty.sh" ]
 }
 
+function setup_context7_api_key_writes_owner_only_secret_without_echoing_it { #@test
+  local api_key="ctx7sk-test_key-123"
+  local env_file="${HOME}/.config/m-config/context7.env"
+
+  run bash -c 'source "$1"; printf "y\n%s\n" "$2" | setup_context7_api_key' _ "${INSTALLER}" "${api_key}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"${api_key}"* ]]
+  [ "$(cat "${env_file}")" = "export CONTEXT7_API_KEY=${api_key}" ]
+  [ "$(stat -f '%Lp' "${env_file}")" = "600" ]
+  [ "$(stat -f '%Lp' "$(dirname "${env_file}")")" = "700" ]
+}
+
+function setup_context7_api_key_does_not_leak_the_secret_under_xtrace { #@test
+  local api_key="ctx7sk-xtrace_secret"
+  local input_file="${BATS_TEST_TMPDIR}/context7-input"
+  printf 'y\n%s\n' "${api_key}" > "${input_file}"
+
+  run bash -x -c 'source "$1"; setup_context7_api_key' _ "${INSTALLER}" < "${input_file}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"${api_key}"* ]]
+}
+
+function setup_context7_api_key_refuses_a_symlinked_secret_directory { #@test
+  local api_key="ctx7sk-symlink_test"
+  local redirected_dir="${BATS_TEST_TMPDIR}/redirected"
+  mkdir -p "${HOME}/.config" "${redirected_dir}"
+  ln -s "${redirected_dir}" "${HOME}/.config/m-config"
+
+  run bash -c 'source "$1"; printf "y\n%s\n" "$2" | setup_context7_api_key' _ "${INSTALLER}" "${api_key}"
+
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Refusing to store"* ]]
+  [ ! -e "${redirected_dir}/context7.env" ]
+}
+
+function setup_context7_api_key_does_not_follow_the_legacy_predictable_temp_symlink { #@test
+  local api_key="ctx7sk-no_clobber"
+  local victim_file="${BATS_TEST_TMPDIR}/victim"
+  printf 'preserve-me\n' > "${victim_file}"
+
+  run bash -c '
+    source "$1"
+    env_path="$(context7_env_path)"
+    mkdir -p "$(dirname "${env_path}")"
+    ln -s "$3" "${env_path}.tmp.$$"
+    printf "y\n%s\n" "$2" | setup_context7_api_key
+  ' _ "${INSTALLER}" "${api_key}" "${victim_file}"
+
+  [ "${status}" -eq 0 ]
+  [ "$(cat "${victim_file}")" = "preserve-me" ]
+  [ "$(cat "${HOME}/.config/m-config/context7.env")" = "export CONTEXT7_API_KEY=${api_key}" ]
+}
+
+function setup_context7_api_key_replaces_atomically_without_duplicates { #@test
+  local first_key="ctx7sk-first_key"
+  local second_key="ctx7sk-second_key"
+  local env_file="${HOME}/.config/m-config/context7.env"
+
+  bash -c 'source "$1"; printf "y\n%s\n" "$2" | setup_context7_api_key' _ "${INSTALLER}" "${first_key}"
+  run bash -c 'source "$1"; printf "y\n%s\n" "$2" | setup_context7_api_key' _ "${INSTALLER}" "${second_key}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Replace the existing Context7 API key"* ]]
+  [ "$(cat "${env_file}")" = "export CONTEXT7_API_KEY=${second_key}" ]
+  [ "$(wc -l < "${env_file}" | tr -d ' ')" -eq 1 ]
+}
+
+function setup_context7_api_key_rejects_invalid_input_without_changing_existing_secret { #@test
+  local env_file="${HOME}/.config/m-config/context7.env"
+  mkdir -p "$(dirname "${env_file}")"
+  printf 'export CONTEXT7_API_KEY=ctx7sk-existing\n' > "${env_file}"
+
+  run bash -c 'source "$1"; printf "y\nnot-a-context7-key\n" | setup_context7_api_key' _ "${INSTALLER}"
+
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid Context7 API key format"* ]]
+  [[ "${output}" != *"not-a-context7-key"* ]]
+  [ "$(cat "${env_file}")" = "export CONTEXT7_API_KEY=ctx7sk-existing" ]
+}
+
+function setup_context7_api_key_decline_preserves_existing_secret { #@test
+  local env_file="${HOME}/.config/m-config/context7.env"
+  mkdir -p "$(dirname "${env_file}")"
+  printf 'export CONTEXT7_API_KEY=ctx7sk-existing\n' > "${env_file}"
+
+  run bash -c 'source "$1"; printf "n\n" | setup_context7_api_key' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Leaving Context7 API key unchanged."* ]]
+  [ "$(cat "${env_file}")" = "export CONTEXT7_API_KEY=ctx7sk-existing" ]
+}
+
 function brewfile_path_prefers_homebrew_package_brewfile { #@test
   TARGET_DIR="${TEST_HOME}/dotfiles"
   mkdir -p "${TARGET_DIR}/homebrew/.config/homebrew"
@@ -430,7 +524,7 @@ EOF
 
 function discover_stow_packages_skips_hidden_and_non_stow_directories { #@test
   TARGET_DIR="${TEST_HOME}/dotfiles"
-  mkdir -p "${TARGET_DIR}/browser" "${TARGET_DIR}/test" "${TARGET_DIR}/git" "${TARGET_DIR}/nvim" "${TARGET_DIR}/zsh" "${TARGET_DIR}/.hidden"
+  mkdir -p "${TARGET_DIR}/browser" "${TARGET_DIR}/test" "${TARGET_DIR}/claude" "${TARGET_DIR}/git" "${TARGET_DIR}/nvim" "${TARGET_DIR}/zsh" "${TARGET_DIR}/.hidden"
   touch "${TARGET_DIR}/README.md"
 
   run discover_stow_packages
