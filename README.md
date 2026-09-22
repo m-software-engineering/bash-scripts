@@ -19,6 +19,7 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - running `brew bundle` against the dotfiles Homebrew package Brewfile, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
 - setting up Node LTS via `mise`
 - stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser` and `test`
+- optionally reading the Context7 API key with hidden input and storing it outside the repository in `~/.config/m-config/context7.env` with owner-only permissions
 - optionally bootstrapping LazyVim plugins after the `nvim` package is stowed
 - optionally enabling the dotfiles daily Homebrew maintenance LaunchAgent after stowing
 - installing secure SSH client defaults from the dotfiles `ssh` package when stow is enabled
@@ -98,7 +99,8 @@ The test suite lives in `test/`, uses Bats, and sources the installer without ru
 - Requests `sudo` for Homebrew install, `brew bundle`, and `xcode-select` repair/switch actions when needed.
 - Resolves the canonical Brewfile at `homebrew/.config/homebrew/Brewfile`, with fallback support for older clones that still use a top-level `Brewfile`.
 - Runs a GNU Stow dry-run before applying changes and ignores macOS metadata files such as `.DS_Store`.
-- Treats `browser` and `test` as automation data, not stow packages; `nvim`, `homebrew`, and `ssh` are normal stow packages.
+- Never prints or versions the Context7 API key. Repeated configuration atomically replaces the single managed environment file instead of appending duplicate entries; its directory and file use modes `700` and `600` respectively.
+- Treats `browser` and `test` as automation data and skips any preserved local `claude` directory; `nvim`, `homebrew`, and `ssh` are normal stow packages.
 - Prompts before bootstrapping LazyVim plugins with `nvim --headless "+Lazy! sync" +qa` when `nvim` and `~/.config/nvim/lua/config/lazy.lua` are present.
 - Optionally moves conflicting files and symlinks into `~/.dotfiles-backup/<timestamp>/`.
 - Prompts before loading the daily Homebrew maintenance LaunchAgent from the stowed `homebrew` package.

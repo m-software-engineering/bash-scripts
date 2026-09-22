@@ -10,7 +10,7 @@ BREW_INSTALL_CMD='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/H
 OMZ_INSTALL_CMD='sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'
 CLT_TIMEOUT_SECONDS=1800
 CLT_POLL_INTERVAL_SECONDS=15
-NON_STOW_PACKAGES=(browser test)
+NON_STOW_PACKAGES=(browser test claude)
 STOW_IGNORE_PATTERNS=(
   "\\.DS_Store$"
   "\\._[^/]+$"
@@ -155,6 +155,94 @@ homebrew_maintenance_plist_path() {
 
 homebrew_maintenance_script_path() {
   printf '%s/.config/homebrew/homebrew-maintenance.sh\n' "${HOME}"
+}
+
+context7_env_path() {
+  printf '%s\n' "${CONTEXT7_ENV_FILE:-${HOME}/.config/m-config/context7.env}"
+}
+
+is_valid_context7_api_key() {
+  local api_key="${1}"
+  [[ "${api_key}" =~ ^ctx7sk[-_][A-Za-z0-9._-]+$ ]]
+}
+
+# Stores the Context7 credential outside the dotfiles repository for both AI harnesses.
+setup_context7_api_key() {
+  local env_path
+  env_path="$(context7_env_path)"
+
+  local prompt="Configure the Context7 API key for Codex and OpenCode?"
+  if [[ -f "${env_path}" ]]; then
+    prompt="Replace the existing Context7 API key for Codex and OpenCode?"
+  fi
+
+  if ! confirm "${prompt}"; then
+    log "Leaving Context7 API key unchanged."
+    return 0
+  fi
+
+  local xtrace_was_enabled=0
+  if [[ "${-}" == *x* ]]; then
+    xtrace_was_enabled=1
+    set +x
+  fi
+
+  local api_key
+  printf 'Context7 API key (input hidden): '
+  if ! IFS= read -r -s api_key; then
+    printf '\n'
+    unset api_key
+    if [[ "${xtrace_was_enabled}" -eq 1 ]]; then
+      set -x
+    fi
+    log "Unable to read the Context7 API key."
+    return 1
+  fi
+  printf '\n'
+
+  if ! is_valid_context7_api_key "${api_key}"; then
+    unset api_key
+    if [[ "${xtrace_was_enabled}" -eq 1 ]]; then
+      set -x
+    fi
+    log "Invalid Context7 API key format; expected a key beginning with ctx7sk- or ctx7sk_."
+    return 1
+  fi
+
+  local env_dir
+  env_dir="$(dirname "${env_path}")"
+  if [[ -L "${env_dir}" ]]; then
+    unset api_key
+    if [[ "${xtrace_was_enabled}" -eq 1 ]]; then
+      set -x
+    fi
+    log "Refusing to store the Context7 API key in a symlinked directory: ${env_dir}"
+    return 1
+  fi
+
+  (
+    umask 077
+    mkdir -p "${env_dir}"
+    chmod 700 "${env_dir}"
+
+    local temp_path
+    temp_path="$(mktemp "${env_dir}/.context7.env.XXXXXX")"
+    trap 'rm -f "${temp_path}"' EXIT
+    if [[ ! -f "${temp_path}" || -L "${temp_path}" ]]; then
+      exit 1
+    fi
+
+    printf 'export CONTEXT7_API_KEY=%s\n' "${api_key}" > "${temp_path}"
+    chmod 600 "${temp_path}"
+    mv -f "${temp_path}" "${env_path}"
+    trap - EXIT
+  )
+  unset api_key
+  if [[ "${xtrace_was_enabled}" -eq 1 ]]; then
+    set -x
+  fi
+
+  log "Context7 API key stored in ${env_path} with owner-only permissions. Restart the shell before using the MCP servers."
 }
 
 ensure_codium_on_path() {
@@ -853,6 +941,7 @@ main() {
   install_brew_bundle
   setup_node_runtime
   stow_packages
+  setup_context7_api_key
   bootstrap_neovim
   setup_homebrew_maintenance
   setup_macos_performance_beauty
