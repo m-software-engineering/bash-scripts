@@ -17,6 +17,11 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - installing Oh My Zsh (if missing)
 - installing zsh plugins (autosuggestions, completions)
 - running `brew bundle` against the dotfiles Homebrew package Brewfile, while skipping known deprecated Homebrew taps and handling the `codex` formula-to-cask migration
+- installing RTK from the Homebrew formula `rtk` (https://github.com/rtk-ai/rtk) when `rtk gain` is not already available
+- installing the native ai-memory macOS release from https://github.com/akitaonrails/ai-memory into `~/Applications/ai-memory`, after verifying the published SHA-256, and linking it from `~/.local/bin`
+- after stow, offering to add `~/.local/bin` to `PATH` in `~/.zshrc` when the ai-memory link exists and that export is missing
+- optionally initializing ai-memory and loading its login LaunchAgent, including on a later run that already has the binary
+- installing the Hermes skills `ayghri/i-have-adhd/skills/i-have-adhd` and `mattpocock/skills/skills/productivity/teach` when they are not already listed
 - setting up Node LTS via `mise`
 - stowing dotfiles packages into `~`, while skipping non-stow data directories such as `browser` and `test`
 - optionally reading the Context7 API key with hidden input and storing it outside the repository in `~/.config/m-config/context7.env` with owner-only permissions
@@ -94,6 +99,8 @@ The test suite lives in `test/`, uses Bats, and sources the installer without ru
 ## Behavior and safeguards
 
 - Uses `set -euo pipefail` and stops on errors.
+- Verifies the published SHA-256 before extracting the ai-memory release, and refuses the install on mismatch.
+- Treats an `rtk` binary without `rtk gain` as the wrong package, does not accept it as RTK, and continues the rest of the installer.
 - Fails fast if run without a TTY (prevents broken prompt behavior from `curl ... | bash`).
 - Performs CLT health checks before clone/Homebrew operations.
 - Requests `sudo` for Homebrew install, `brew bundle`, and `xcode-select` repair/switch actions when needed.
