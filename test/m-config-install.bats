@@ -691,3 +691,328 @@ EOF
   [[ "$(cat "${brew_log}")" == *"args=bundle --file ${DOTFILES_DIR}/Brewfile"* ]]
   [[ "$(cat "${brew_log}")" != *"args=install --cask codex"* ]]
 }
+
+function ai_memory_macos_asset_selects_the_release_for_the_architecture { #@test
+  run ai_memory_macos_asset arm64
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "ai-memory-macos-aarch64.tar.gz" ]
+
+  run ai_memory_macos_asset x86_64
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "ai-memory-macos-x86_64.tar.gz" ]
+
+  run ai_memory_macos_asset ppc
+  [ "${status}" -eq 1 ]
+}
+
+function install_ai_memory_skips_download_when_the_binary_exists { #@test
+  local binary
+  binary="$(ai_memory_binary_path)"
+  mkdir -p "$(dirname "${binary}")"
+  printf '#!/bin/sh\nexit 0\n' > "${binary}"
+  chmod +x "${binary}"
+
+  run install_ai_memory
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"ai-memory already installed. Skipping download."* ]]
+  [ -L "${HOME}/.local/bin/ai-memory" ]
+}
+
+function install_ai_memory_decline_does_not_download { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  mkdir -p "${bin_dir}"
+  cat > "${bin_dir}/curl" << 'EOF'
+#!/bin/sh
+echo "curl should not run" >&2
+exit 1
+EOF
+  chmod +x "${bin_dir}/curl"
+
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "n\n" | install_ai_memory' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping ai-memory install."* ]]
+  [ ! -e "${HOME}/Applications/ai-memory" ]
+}
+
+function install_ai_memory_release_refuses_a_checksum_mismatch { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local fixture_dir="${BATS_TEST_TMPDIR}/fixture"
+  local archive="${fixture_dir}/ai-memory.tar.gz"
+  mkdir -p "${bin_dir}" "${fixture_dir}/payload"
+  printf '#!/bin/sh\nexit 0\n' > "${fixture_dir}/payload/ai-memory"
+  chmod +x "${fixture_dir}/payload/ai-memory"
+  tar -czf "${archive}" -C "${fixture_dir}/payload" ai-memory
+
+  cat > "${bin_dir}/curl" << 'EOF'
+#!/bin/sh
+set -eu
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      out="$2"
+      shift 2
+      ;;
+    -fsSL | -f | -s | -S | -L)
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+case "${out}" in
+  *.sha256) printf '0000000000000000000000000000000000000000000000000000000000000000  bad\n' > "${out}" ;;
+  *) cp "${AI_MEMORY_FIXTURE_ARCHIVE}" "${out}" ;;
+esac
+EOF
+  chmod +x "${bin_dir}/curl"
+
+  export AI_MEMORY_FIXTURE_ARCHIVE="${archive}"
+  PATH="${bin_dir}:${PATH}" run install_ai_memory_release
+
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"checksum mismatch"* ]]
+  [ ! -x "${HOME}/Applications/ai-memory/ai-memory" ]
+}
+
+function install_ai_memory_installs_a_verified_release_and_skips_login_without_a_template { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local fixture_dir="${BATS_TEST_TMPDIR}/fixture"
+  local archive="${fixture_dir}/ai-memory.tar.gz"
+  local call_log="${BATS_TEST_TMPDIR}/ai-memory.log"
+  mkdir -p "${bin_dir}" "${fixture_dir}/payload"
+  cat > "${fixture_dir}/payload/ai-memory" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${AI_MEMORY_CALL_LOG}"
+exit 0
+EOF
+  chmod +x "${fixture_dir}/payload/ai-memory"
+  tar -czf "${archive}" -C "${fixture_dir}/payload" ai-memory
+
+  cat > "${bin_dir}/curl" << 'EOF'
+#!/bin/sh
+set -eu
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      out="$2"
+      shift 2
+      ;;
+    -fsSL | -f | -s | -S | -L)
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+case "${out}" in
+  *.sha256) shasum -a 256 "${AI_MEMORY_FIXTURE_ARCHIVE}" | awk '{ print $1 }' > "${out}" ;;
+  *) cp "${AI_MEMORY_FIXTURE_ARCHIVE}" "${out}" ;;
+esac
+EOF
+  chmod +x "${bin_dir}/curl"
+
+  export AI_MEMORY_FIXTURE_ARCHIVE="${archive}"
+  export AI_MEMORY_CALL_LOG="${call_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "y\n" | install_ai_memory' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [ -x "${HOME}/Applications/ai-memory/ai-memory" ]
+  [ -L "${HOME}/.local/bin/ai-memory" ]
+  [[ "$(cat "${call_log}")" == *"init"* ]]
+  [[ "${output}" == *"LaunchAgent template not found"* ]]
+}
+
+function install_rtk_skips_when_gain_already_works { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  mkdir -p "${bin_dir}"
+  printf '#!/bin/sh\nexit 0\n' > "${bin_dir}/brew"
+  printf '#!/bin/sh\nexit 0\n' > "${bin_dir}/rtk"
+  chmod +x "${bin_dir}/brew" "${bin_dir}/rtk"
+
+  PATH="${bin_dir}:${PATH}" run install_rtk
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"RTK token killer already installed. Skipping."* ]]
+}
+
+function install_rtk_decline_does_not_call_brew_install { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local brew_log="${BATS_TEST_TMPDIR}/brew.log"
+  mkdir -p "${bin_dir}"
+  cat > "${bin_dir}/brew" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${BREW_CALL_LOG}"
+exit 0
+EOF
+  cat > "${bin_dir}/rtk" << 'EOF'
+#!/bin/sh
+exit 1
+EOF
+  chmod +x "${bin_dir}/brew" "${bin_dir}/rtk"
+
+  export BREW_CALL_LOG="${brew_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "n\n" | install_rtk' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping RTK install."* ]]
+  [ ! -s "${brew_log}" ]
+}
+
+function install_rtk_installs_the_homebrew_formula_and_requires_gain { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local brew_log="${BATS_TEST_TMPDIR}/brew.log"
+  local flag="${BATS_TEST_TMPDIR}/rtk-installed"
+  mkdir -p "${bin_dir}"
+  cat > "${bin_dir}/brew" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${BREW_CALL_LOG}"
+if [ "$*" = "install rtk" ]; then
+  touch "${RTK_INSTALLED_FLAG}"
+fi
+exit 0
+EOF
+  cat > "${bin_dir}/rtk" << 'EOF'
+#!/bin/sh
+if [ -f "${RTK_INSTALLED_FLAG}" ]; then
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "${bin_dir}/brew" "${bin_dir}/rtk"
+
+  export BREW_CALL_LOG="${brew_log}"
+  export RTK_INSTALLED_FLAG="${flag}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "y\n" | install_rtk' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "$(cat "${brew_log}")" == "install rtk" ]]
+  [[ "${output}" == *"RTK token killer installed."* ]]
+}
+
+function install_hermes_skills_installs_only_missing_identifiers { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local call_log="${BATS_TEST_TMPDIR}/hermes.log"
+  mkdir -p "${bin_dir}"
+  cat > "${bin_dir}/hermes" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${HERMES_CALL_LOG}"
+if [ "$1" = "skills" ] && [ "$2" = "list" ]; then
+  printf 'teach\n'
+fi
+exit 0
+EOF
+  chmod +x "${bin_dir}/hermes"
+
+  export HERMES_CALL_LOG="${call_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "y\n" | install_hermes_skills' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Hermes skill teach already installed. Skipping."* ]]
+  [[ "$(cat "${call_log}")" == *"skills install ayghri/i-have-adhd/skills/i-have-adhd --yes"* ]]
+  [[ "$(cat "${call_log}")" != *"skills install mattpocock/skills/skills/productivity/teach --yes"* ]]
+}
+
+function install_rtk_wrong_package_does_not_abort_the_caller { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local brew_log="${BATS_TEST_TMPDIR}/brew.log"
+  mkdir -p "${bin_dir}"
+  cat > "${bin_dir}/brew" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${BREW_CALL_LOG}"
+exit 0
+EOF
+  printf '#!/bin/sh\nexit 1\n' > "${bin_dir}/rtk"
+  chmod +x "${bin_dir}/brew" "${bin_dir}/rtk"
+
+  export BREW_CALL_LOG="${brew_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'set -euo pipefail; source "$1"; printf "y\n" | install_rtk; printf "CONTINUED\n"' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"not the rtk-ai token killer. Continuing."* ]]
+  [[ "${output}" == *"CONTINUED"* ]]
+  [[ "$(cat "${brew_log}")" == "install rtk" ]]
+}
+
+function install_ai_memory_existing_binary_still_inits_and_offers_launchd { #@test
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local call_log="${BATS_TEST_TMPDIR}/ai-memory.log"
+  local launchctl_log="${BATS_TEST_TMPDIR}/launchctl.log"
+  local binary
+  local template
+  binary="$(ai_memory_binary_path)"
+  template="${HOME}/Applications/ai-memory/packaging/launchd/com.github.akitaonrails.ai-memory.plist"
+  mkdir -p "${bin_dir}" "$(dirname "${template}")"
+  cat > "${binary}" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${AI_MEMORY_CALL_LOG}"
+exit 0
+EOF
+  chmod +x "${binary}"
+  printf '__AI_MEMORY_BIN__ __HOME__\n' > "${template}"
+  cat > "${bin_dir}/launchctl" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${LAUNCHCTL_CALL_LOG}"
+exit 1
+EOF
+  chmod +x "${bin_dir}/launchctl"
+
+  export AI_MEMORY_CALL_LOG="${call_log}"
+  export LAUNCHCTL_CALL_LOG="${launchctl_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; printf "n\n" | install_ai_memory' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping download."* ]]
+  [[ "${output}" == *"data directory initialized."* ]]
+  [[ "${output}" == *"Skipping ai-memory login service."* ]]
+  [[ "$(cat "${call_log}")" == "init" ]]
+  [[ "$(cat "${launchctl_log}")" != *"bootstrap"* ]]
+  [ ! -e "${HOME}/Library/LaunchAgents/com.github.akitaonrails.ai-memory.plist" ]
+}
+
+function ensure_local_bin_on_path_skips_without_the_ai_memory_link { #@test
+  printf 'existing\n' > "${HOME}/.zshrc"
+
+  run ensure_local_bin_on_path
+
+  [ "${status}" -eq 0 ]
+  [ "$(cat "${HOME}/.zshrc")" = "existing" ]
+}
+
+function ensure_local_bin_on_path_decline_leaves_zshrc_unchanged { #@test
+  mkdir -p "${HOME}/.local/bin"
+  ln -sfn "${HOME}/Applications/ai-memory/ai-memory" "${HOME}/.local/bin/ai-memory"
+  printf 'existing\n' > "${HOME}/.zshrc"
+
+  run bash -c 'source "$1"; printf "n\n" | ensure_local_bin_on_path' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping PATH update."* ]]
+  [ "$(cat "${HOME}/.zshrc")" = "existing" ]
+}
+
+function ensure_local_bin_on_path_appends_once_when_confirmed { #@test
+  mkdir -p "${HOME}/.local/bin"
+  ln -sfn "${HOME}/Applications/ai-memory/ai-memory" "${HOME}/.local/bin/ai-memory"
+  printf 'existing\n' > "${HOME}/.zshrc"
+
+  run bash -c 'source "$1"; printf "y\n" | ensure_local_bin_on_path' _ "${INSTALLER}"
+
+  [ "${status}" -eq 0 ]
+  # shellcheck disable=SC2016
+  [[ "$(cat "${HOME}/.zshrc")" == *'export PATH="$HOME/.local/bin:$PATH"'* ]]
+
+  run ensure_local_bin_on_path
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"already on PATH"* ]]
+  # shellcheck disable=SC2016
+  [[ "$(cat "${HOME}/.zshrc")" == *'export PATH="$HOME/.local/bin:$PATH"'* ]]
+  # shellcheck disable=SC2016
+  [[ "$(cat "${HOME}/.zshrc")" != *'export PATH="$HOME/.local/bin:$PATH"'*'export PATH="$HOME/.local/bin:$PATH"'* ]]
+}

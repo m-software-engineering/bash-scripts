@@ -30,6 +30,17 @@ BREW_BUNDLE_DEPRECATED_TAPS=(
 BREW_BUNDLE_MIGRATED_FORMULAE_TO_CASKS=(
   codex
 )
+AI_MEMORY_RELEASE_BASE="https://github.com/akitaonrails/ai-memory/releases/latest/download"
+AI_MEMORY_LAUNCHD_LABEL="com.github.akitaonrails.ai-memory"
+LOCAL_BIN_PATH_EXPORT="export PATH=\"\$HOME/.local/bin:\$PATH\""
+HERMES_SKILL_IDENTIFIERS=(
+  "ayghri/i-have-adhd/skills/i-have-adhd"
+  "mattpocock/skills/skills/productivity/teach"
+)
+HERMES_SKILL_NAMES=(
+  "i-have-adhd"
+  "teach"
+)
 
 REPO_URL="${DOTFILES_REPO_URL:-${DEFAULT_REPO_URL}}"
 TARGET_DIR="${DOTFILES_DIR:-${DEFAULT_TARGET_DIR}}"
@@ -793,6 +804,277 @@ install_browser_extensions() {
   log "Done opening browser extension pages. Install each extension manually from the opened tabs."
 }
 
+ai_memory_macos_asset() {
+  local arch="${1:-$(uname -m)}"
+  case "${arch}" in
+    arm64 | aarch64) printf 'ai-memory-macos-aarch64.tar.gz\n' ;;
+    x86_64) printf 'ai-memory-macos-x86_64.tar.gz\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+ai_memory_binary_path() {
+  printf '%s/Applications/ai-memory/ai-memory\n' "${HOME}"
+}
+
+ai_memory_installed() {
+  local binary
+  binary="$(ai_memory_binary_path)"
+  [[ -x "${binary}" && ! -d "${binary}" ]]
+}
+
+ai_memory_extract_root() {
+  local extract_dir="${1}"
+  local nested
+  if [[ -x "${extract_dir}/ai-memory" && ! -d "${extract_dir}/ai-memory" ]]; then
+    printf '%s\n' "${extract_dir}"
+    return 0
+  fi
+  nested="$(find "${extract_dir}" -mindepth 2 -maxdepth 2 -type f -name ai-memory -perm -111 -print -quit)"
+  if [[ -n "${nested}" ]]; then
+    dirname "${nested}"
+    return 0
+  fi
+  return 1
+}
+
+file_sha256() {
+  local file="${1}"
+  if command -v shasum > /dev/null 2>&1; then
+    shasum -a 256 "${file}" | awk '{ print $1 }'
+    return 0
+  fi
+  sha256sum "${file}" | awk '{ print $1 }'
+}
+
+ensure_ai_memory_symlink() {
+  local binary
+  local link_dir
+  local link_path
+  binary="$(ai_memory_binary_path)"
+  link_dir="${HOME}/.local/bin"
+  link_path="${link_dir}/ai-memory"
+  if ! ai_memory_installed; then
+    return 0
+  fi
+  mkdir -p "${link_dir}"
+  ln -sfn "${binary}" "${link_path}"
+}
+
+ensure_local_bin_on_path() {
+  local zshrc="${HOME}/.zshrc"
+  local link_path="${HOME}/.local/bin/ai-memory"
+  if [[ ! -e "${link_path}" ]]; then
+    return 0
+  fi
+  if [[ -f "${zshrc}" ]] && grep -Fq "${LOCAL_BIN_PATH_EXPORT}" "${zshrc}"; then
+    log "${HOME}/.local/bin is already on PATH in ${zshrc}."
+    return 0
+  fi
+  if ! confirm "Add ${HOME}/.local/bin to PATH in ${zshrc} so ai-memory is found in new shells?"; then
+    log "Skipping PATH update. ai-memory stays unreachable until ${HOME}/.local/bin is on PATH."
+    return 0
+  fi
+  touch "${zshrc}"
+  if [[ -s "${zshrc}" ]]; then
+    printf '\n%s\n' "${LOCAL_BIN_PATH_EXPORT}" >> "${zshrc}"
+  else
+    printf '%s\n' "${LOCAL_BIN_PATH_EXPORT}" >> "${zshrc}"
+  fi
+  log "Added ${HOME}/.local/bin to PATH in ${zshrc}. Start a new shell to use it."
+}
+
+install_ai_memory_release() {
+  local asset
+  local stage
+  local archive
+  local expected
+  local actual
+  local extract_root
+  local dest
+  if ! asset="$(ai_memory_macos_asset)"; then
+    log "Unsupported architecture for the ai-memory macOS release: $(uname -m)"
+    return 1
+  fi
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/ai-memory.XXXXXX")"
+  archive="${stage}/${asset}"
+  if ! curl -fsSL "${AI_MEMORY_RELEASE_BASE}/${asset}" -o "${archive}"; then
+    rm -rf "${stage}"
+    log "Unable to download the ai-memory release."
+    return 1
+  fi
+  if ! curl -fsSL "${AI_MEMORY_RELEASE_BASE}/${asset}.sha256" -o "${archive}.sha256"; then
+    rm -rf "${stage}"
+    log "Unable to download the ai-memory checksum."
+    return 1
+  fi
+  expected="$(awk 'NR == 1 { print $1 }' "${archive}.sha256")"
+  actual="$(file_sha256 "${archive}")"
+  if [[ -z "${expected}" || "${actual}" != "${expected}" ]]; then
+    rm -rf "${stage}"
+    log "ai-memory checksum mismatch. Refusing to install."
+    return 1
+  fi
+  mkdir -p "${stage}/extract"
+  if ! tar -xzf "${archive}" -C "${stage}/extract"; then
+    rm -rf "${stage}"
+    log "Unable to extract the ai-memory release."
+    return 1
+  fi
+  if ! extract_root="$(ai_memory_extract_root "${stage}/extract")"; then
+    rm -rf "${stage}"
+    log "ai-memory release did not contain the expected binary."
+    return 1
+  fi
+  dest="${HOME}/Applications/ai-memory"
+  mkdir -p "${HOME}/Applications"
+  rm -rf "${dest}"
+  if [[ "${extract_root}" == "${stage}/extract" ]]; then
+    mv "${extract_root}" "${dest}"
+  else
+    mkdir -p "${dest}"
+    mv "${extract_root}/." "${dest}/"
+  fi
+  rm -rf "${stage}"
+  if ! ai_memory_installed; then
+    log "ai-memory binary is missing after extraction."
+    return 1
+  fi
+}
+
+init_ai_memory_if_needed() {
+  local binary
+  local data_dir
+  binary="$(ai_memory_binary_path)"
+  data_dir="${HOME}/Library/Application Support/ai-memory"
+  if [[ -d "${data_dir}" ]]; then
+    log "ai-memory data directory already exists. Skipping init."
+    return 0
+  fi
+  if ! "${binary}" init; then
+    log "ai-memory init failed. Continuing."
+    return 0
+  fi
+  log "ai-memory data directory initialized."
+}
+
+setup_ai_memory_launchd() {
+  local template
+  local plist_path
+  local binary
+  template="${HOME}/Applications/ai-memory/packaging/launchd/${AI_MEMORY_LAUNCHD_LABEL}.plist"
+  plist_path="${HOME}/Library/LaunchAgents/${AI_MEMORY_LAUNCHD_LABEL}.plist"
+  binary="$(ai_memory_binary_path)"
+  if [[ ! -f "${template}" ]]; then
+    log "ai-memory LaunchAgent template not found. Skipping login service."
+    return 0
+  fi
+  if ! command -v launchctl > /dev/null 2>&1; then
+    log "launchctl not found. Skipping ai-memory login service."
+    return 0
+  fi
+  if launchctl print "gui/$(id -u)/${AI_MEMORY_LAUNCHD_LABEL}" > /dev/null 2>&1; then
+    log "ai-memory LaunchAgent is already loaded."
+    return 0
+  fi
+  if ! confirm "Start ai-memory at login?"; then
+    log "Skipping ai-memory login service."
+    return 0
+  fi
+  mkdir -p "${HOME}/Library/Logs/ai-memory" "${HOME}/Library/LaunchAgents"
+  sed -e "s|__AI_MEMORY_BIN__|${binary}|g" -e "s|__HOME__|${HOME}|g" "${template}" > "${plist_path}"
+  if ! launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
+    log "Unable to bootstrap the ai-memory LaunchAgent. Continuing."
+    return 0
+  fi
+  log "ai-memory LaunchAgent loaded."
+}
+
+install_ai_memory() {
+  local already_installed=0
+  if ai_memory_installed; then
+    already_installed=1
+    log "ai-memory already installed. Skipping download."
+    ensure_ai_memory_symlink
+  else
+    if ! confirm "Install ai-memory from the latest macOS release?"; then
+      log "Skipping ai-memory install."
+      return 0
+    fi
+    if ! install_ai_memory_release; then
+      log "ai-memory install failed. Continuing."
+      return 0
+    fi
+    ensure_ai_memory_symlink
+  fi
+  init_ai_memory_if_needed
+  setup_ai_memory_launchd
+  if [[ "${already_installed}" -eq 0 ]]; then
+    log "ai-memory installed at $(ai_memory_binary_path)."
+  fi
+}
+
+rtk_is_token_killer() {
+  command -v rtk > /dev/null 2>&1 && rtk gain --help > /dev/null 2>&1
+}
+
+install_rtk() {
+  ensure_brew_on_path
+  if ! command -v brew > /dev/null 2>&1; then
+    log "Homebrew not found. Skipping RTK install."
+    return 0
+  fi
+  if rtk_is_token_killer; then
+    log "RTK token killer already installed. Skipping."
+    return 0
+  fi
+  if ! confirm "Install RTK (rtk-ai/rtk) with Homebrew?"; then
+    log "Skipping RTK install."
+    return 0
+  fi
+  if ! brew install rtk; then
+    log "RTK Homebrew install failed. Continuing."
+    return 0
+  fi
+  if ! rtk_is_token_killer; then
+    log "Installed rtk does not provide rtk gain. This is not the rtk-ai token killer. Continuing."
+    return 0
+  fi
+  log "RTK token killer installed."
+}
+
+hermes_skill_present() {
+  local name="${1}"
+  command -v hermes > /dev/null 2>&1 || return 1
+  hermes skills list 2> /dev/null | grep -Eq "(^|[^[:alnum:]_-])${name}([^[:alnum:]_-]|$)"
+}
+
+install_hermes_skills() {
+  local index
+  local identifier
+  local name
+  ensure_brew_on_path
+  if ! command -v hermes > /dev/null 2>&1; then
+    log "hermes not found. Skipping Hermes skill install."
+    return 0
+  fi
+  if ! confirm "Install Hermes skills i-have-adhd and teach?"; then
+    log "Skipping Hermes skill install."
+    return 0
+  fi
+  for index in "${!HERMES_SKILL_IDENTIFIERS[@]}"; do
+    identifier="${HERMES_SKILL_IDENTIFIERS[${index}]}"
+    name="${HERMES_SKILL_NAMES[${index}]}"
+    if hermes_skill_present "${name}"; then
+      log "Hermes skill ${name} already installed. Skipping."
+      continue
+    fi
+    if ! hermes skills install "${identifier}" --yes; then
+      log "Unable to install Hermes skill ${name}. Continuing."
+    fi
+  done
+}
+
 extract_stow_conflict_targets() {
   local line
   local rel
@@ -939,8 +1221,11 @@ main() {
   install_oh_my_zsh
   install_omz_plugins
   install_brew_bundle
+  install_rtk
+  install_ai_memory
   setup_node_runtime
   stow_packages
+  ensure_local_bin_on_path
   setup_context7_api_key
   bootstrap_neovim
   setup_homebrew_maintenance
@@ -948,6 +1233,7 @@ main() {
   setup_app_defaults
   install_vscodium_extensions
   install_browser_extensions
+  install_hermes_skills
   log "Done."
 }
 
