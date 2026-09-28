@@ -64,6 +64,29 @@ log() {
   printf '\n==> %s\n' "$1"
 }
 
+INSTALL_FAILURES=""
+
+record_failure() {
+  local step="${1}"
+  INSTALL_FAILURES="${INSTALL_FAILURES}${step}"$'\n'
+  log "Failed: ${step}"
+}
+
+report_install_result() {
+  local step
+  if [[ -z "${INSTALL_FAILURES}" ]]; then
+    log "Setup finished with no failed steps."
+    return 0
+  fi
+
+  log "Setup finished with failed steps. Re-run the installer; completed steps are skipped."
+  while IFS= read -r step; do
+    [[ -n "${step}" ]] || continue
+    printf '  - %s\n' "${step}"
+  done <<< "${INSTALL_FAILURES}"
+  return 1
+}
+
 confirm() {
   local prompt="${1:-Continue?}"
   local reply
@@ -454,7 +477,10 @@ clone_repo() {
     exit 1
   fi
   if confirm "Clone dotfiles repo (${REPO_URL}) to ${TARGET_DIR}?"; then
-    git clone "${REPO_URL}" "${TARGET_DIR}"
+    if ! git clone "${REPO_URL}" "${TARGET_DIR}"; then
+      record_failure "Clone dotfiles repo"
+      exit 1
+    fi
   else
     log "Skipping clone."
   fi
@@ -468,8 +494,14 @@ install_homebrew() {
   fi
   if confirm "Install Homebrew?"; then
     require_sudo
-    eval "${BREW_INSTALL_CMD}"
+    if ! eval "${BREW_INSTALL_CMD}"; then
+      record_failure "Homebrew install"
+      return 0
+    fi
     ensure_brew_on_path
+    if ! command -v brew > /dev/null 2>&1; then
+      record_failure "Homebrew install did not put brew on PATH"
+    fi
   else
     log "Skipping Homebrew install."
   fi
@@ -481,7 +513,9 @@ install_oh_my_zsh() {
     return 0
   fi
   if confirm "Install Oh-My-Zsh?"; then
-    RUNZSH=no CHSH=no KEEP_ZSHRC=yes eval "${OMZ_INSTALL_CMD}"
+    if ! RUNZSH=no CHSH=no KEEP_ZSHRC=yes eval "${OMZ_INSTALL_CMD}"; then
+      record_failure "Oh-My-Zsh install"
+    fi
   else
     log "Skipping Oh-My-Zsh install."
   fi
@@ -501,7 +535,9 @@ install_omz_plugins() {
     log "zsh-autosuggestions already installed. Skipping."
   else
     if confirm "Install zsh-autosuggestions?"; then
-      git clone https://github.com/zsh-users/zsh-autosuggestions "${autosuggest_dir}"
+      if ! git clone https://github.com/zsh-users/zsh-autosuggestions "${autosuggest_dir}"; then
+        record_failure "zsh-autosuggestions install"
+      fi
     else
       log "Skipping zsh-autosuggestions."
     fi
@@ -511,7 +547,9 @@ install_omz_plugins() {
     log "zsh-completions already installed. Skipping."
   else
     if confirm "Install zsh-completions?"; then
-      git clone https://github.com/zsh-users/zsh-completions.git "${completions_dir}"
+      if ! git clone https://github.com/zsh-users/zsh-completions.git "${completions_dir}"; then
+        record_failure "zsh-completions install"
+      fi
     else
       log "Skipping zsh-completions."
     fi
@@ -530,6 +568,7 @@ install_migrated_brew_casks() {
   if brewfile_has_entry "${brewfile}" brew codex && ! brewfile_has_entry "${brewfile}" cask codex; then
     log "Installing codex as a Homebrew cask because the formula has migrated."
     brew install --cask codex
+    return
   fi
 }
 
@@ -542,7 +581,9 @@ run_brew_bundle() {
   brew_skip="$(append_words "${HOMEBREW_BUNDLE_BREW_SKIP:-}" "${BREW_BUNDLE_MIGRATED_FORMULAE_TO_CASKS[@]}")"
 
   log "Running brew bundle."
-  HOMEBREW_BUNDLE_TAP_SKIP="${tap_skip}" HOMEBREW_BUNDLE_BREW_SKIP="${brew_skip}" brew bundle --file "${brewfile}"
+  if ! HOMEBREW_BUNDLE_TAP_SKIP="${tap_skip}" HOMEBREW_BUNDLE_BREW_SKIP="${brew_skip}" brew bundle --file "${brewfile}"; then
+    return 1
+  fi
   install_migrated_brew_casks "${brewfile}"
 }
 
@@ -559,7 +600,9 @@ install_brew_bundle() {
   fi
   if confirm "Install Brewfile packages from ${brewfile}?"; then
     require_sudo
-    run_brew_bundle "${brewfile}"
+    if ! run_brew_bundle "${brewfile}"; then
+      record_failure "Brewfile install"
+    fi
   else
     log "Skipping Brewfile install."
   fi
@@ -597,16 +640,28 @@ setup_homebrew_maintenance() {
   if confirm "Enable daily Homebrew maintenance LaunchAgent?"; then
     if ! launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
       log "Unable to bootstrap Homebrew maintenance LaunchAgent. Continuing."
+      record_failure "Homebrew maintenance LaunchAgent"
       return 0
     fi
 
     if ! launchctl enable "gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL}"; then
       log "Unable to enable Homebrew maintenance LaunchAgent. Continuing."
+      record_failure "Homebrew maintenance LaunchAgent"
       return 0
     fi
   else
     log "Skipping scheduled Homebrew maintenance setup."
   fi
+}
+
+mise_has_global_node() {
+  command -v mise > /dev/null 2>&1 || return 1
+  mise ls --global node 2> /dev/null | grep -q .
+}
+
+mise_node_idiomatic_enabled() {
+  command -v mise > /dev/null 2>&1 || return 1
+  mise settings get idiomatic_version_file_enable_tools 2> /dev/null | grep -q node
 }
 
 setup_node_runtime() {
@@ -619,7 +674,10 @@ setup_node_runtime() {
   if ! command -v mise > /dev/null 2>&1; then
     log "mise is not installed."
     if confirm "Install mise with Homebrew now?"; then
-      brew install mise
+      if ! brew install mise; then
+        record_failure "mise install"
+        return 0
+      fi
     else
       log "Skipping Node runtime setup."
       return 0
@@ -627,19 +685,26 @@ setup_node_runtime() {
   fi
 
   if ! command -v mise > /dev/null 2>&1; then
-    log "mise not found on PATH after install. Skipping Node runtime setup."
+    record_failure "mise install did not put mise on PATH"
     return 0
   fi
 
-  if confirm "Install Node.js LTS with mise and set it as the global default?"; then
-    mise use --global node@lts
+  if mise_has_global_node; then
+    log "Node.js is already installed with mise. Skipping Node.js LTS install."
+  elif confirm "Install Node.js LTS with mise and set it as the global default?"; then
+    if ! mise use --global node@lts; then
+      record_failure "Node.js LTS install"
+    fi
   else
     log "Skipping Node.js LTS install."
   fi
 
-  if confirm "Enable mise support for .nvmrc and .node-version files?"; then
+  if mise_node_idiomatic_enabled; then
+    log "mise already reads .nvmrc and .node-version. Skipping."
+  elif confirm "Enable mise support for .nvmrc and .node-version files?"; then
     if ! mise settings add idiomatic_version_file_enable_tools node; then
       log "Unable to update mise idiomatic Node version file setting. Continuing."
+      record_failure "mise idiomatic Node version files"
     fi
   else
     log "Skipping mise idiomatic Node version file support."
@@ -680,7 +745,9 @@ setup_app_defaults() {
   fi
 
   if confirm "Set Helium as browser, Microsoft Edge as PDF reader, and WezTerm as terminal handler?"; then
-    DOTFILES_DIR="${TARGET_DIR}" bash "${defaults_script}"
+    if ! DOTFILES_DIR="${TARGET_DIR}" bash "${defaults_script}"; then
+      record_failure "Default app setup"
+    fi
   else
     log "Skipping default app setup."
   fi
@@ -697,7 +764,9 @@ setup_macos_performance_beauty() {
   fi
 
   if confirm "Apply macOS performance and appearance defaults from dotfiles?"; then
-    DOTFILES_DIR="${TARGET_DIR}" bash "${tuning_script}"
+    if ! DOTFILES_DIR="${TARGET_DIR}" bash "${tuning_script}"; then
+      record_failure "macOS performance and appearance defaults"
+    fi
   else
     log "Skipping macOS performance and appearance defaults."
   fi
@@ -722,6 +791,7 @@ bootstrap_neovim() {
       log "LazyVim plugins synced."
     else
       log "LazyVim plugin bootstrap failed. Run nvim once to finish installation."
+      record_failure "LazyVim plugin bootstrap"
     fi
   else
     log "Skipping LazyVim plugin bootstrap."
@@ -745,7 +815,9 @@ install_vscodium_extensions() {
   fi
 
   if confirm "Install missing VSCodium extensions from dotfiles?"; then
-    DOTFILES_DIR="${TARGET_DIR}" bash "${extensions_script}"
+    if ! DOTFILES_DIR="${TARGET_DIR}" bash "${extensions_script}"; then
+      record_failure "VSCodium extension install"
+    fi
   else
     log "Skipping VSCodium extension install."
   fi
@@ -796,7 +868,9 @@ install_browser_extensions() {
     while IFS= read -r url || [[ -n "${url}" ]]; do
       [[ -n "${url}" ]] || continue
       [[ "${url}" == \#* ]] && continue
-      open -a "${app_path}" "${url}"
+      if ! open -a "${app_path}" "${url}"; then
+        record_failure "Open browser extension page in ${label}"
+      fi
       sleep 0.15
     done < "${urls_file}"
   done
@@ -953,6 +1027,7 @@ init_ai_memory_if_needed() {
   fi
   if ! "${binary}" init; then
     log "ai-memory init failed. Continuing."
+    record_failure "ai-memory init"
     return 0
   fi
   log "ai-memory data directory initialized."
@@ -985,6 +1060,7 @@ setup_ai_memory_launchd() {
   sed -e "s|__AI_MEMORY_BIN__|${binary}|g" -e "s|__HOME__|${HOME}|g" "${template}" > "${plist_path}"
   if ! launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
     log "Unable to bootstrap the ai-memory LaunchAgent. Continuing."
+    record_failure "ai-memory LaunchAgent"
     return 0
   fi
   log "ai-memory LaunchAgent loaded."
@@ -1003,6 +1079,7 @@ install_ai_memory() {
     fi
     if ! install_ai_memory_release; then
       log "ai-memory install failed. Continuing."
+      record_failure "ai-memory install"
       return 0
     fi
     ensure_ai_memory_symlink
@@ -1034,10 +1111,12 @@ install_rtk() {
   fi
   if ! brew install rtk; then
     log "RTK Homebrew install failed. Continuing."
+    record_failure "RTK install"
     return 0
   fi
   if ! rtk_is_token_killer; then
     log "Installed rtk does not provide rtk gain. This is not the rtk-ai token killer. Continuing."
+    record_failure "RTK install"
     return 0
   fi
   log "RTK token killer installed."
@@ -1071,6 +1150,7 @@ install_hermes_skills() {
     fi
     if ! hermes skills install "${identifier}" --yes; then
       log "Unable to install Hermes skill ${name}. Continuing."
+      record_failure "Hermes skill ${name}"
     fi
   done
 }
@@ -1177,6 +1257,7 @@ stow_packages() {
     if [[ "${dry_status}" -ne 0 && "${has_conflicts}" -eq 0 ]]; then
       log "Stow dry-run failed without a recognized conflict. Skipping stow."
       printf '%s\n' "${dry_output}"
+      record_failure "Stow dry-run"
       return 0
     fi
 
@@ -1187,9 +1268,12 @@ stow_packages() {
         local timestamp
         timestamp="$(date +%Y%m%d-%H%M%S)"
         if backup_stow_conflicts "${dry_output}" "${HOME}/.dotfiles-backup/${timestamp}"; then
-          stow -v "${stow_args[@]}"
+          if ! stow -v "${stow_args[@]}"; then
+            record_failure "Stow packages"
+          fi
         else
           log "Skipping stow because conflicts could not be backed up safely."
+          record_failure "Stow conflict backup"
         fi
       else
         log "Skipping stow due to conflicts."
@@ -1197,9 +1281,16 @@ stow_packages() {
       return 0
     fi
 
+    if ! printf '%s\n' "${dry_output}" | grep -E '^(LINK|UNLINK|MKDIR):' > /dev/null 2>&1; then
+      log "Stow packages are already linked. Skipping."
+      return 0
+    fi
+
     log "Dry-run looks clean."
     if confirm "Proceed with stow?"; then
-      stow -v "${stow_args[@]}"
+      if ! stow -v "${stow_args[@]}"; then
+        record_failure "Stow packages"
+      fi
     else
       log "Skipping stow."
     fi
@@ -1235,12 +1326,14 @@ setup_shottr_and_alttab() {
       fi
       if ! brew install --cask "${cask}"; then
         log "Unable to install ${cask}. Continuing."
+        record_failure "${cask} install"
       fi
     done
   fi
 
   if ! DOTFILES_DIR="${TARGET_DIR}" bash "${config_script}"; then
     log "Unable to apply Shottr and AltTab shortcuts. Continuing."
+    record_failure "Shottr and AltTab shortcuts"
   fi
 }
 
@@ -1289,6 +1382,25 @@ if mode == "check" {
   print("wallpaper-image-ok")
   exit(0)
 }
+if mode == "status" {
+  var already = !NSScreen.screens.isEmpty
+  for screen in NSScreen.screens {
+    guard let current = NSWorkspace.shared.desktopImageURL(for: screen) else {
+      already = false
+      break
+    }
+    if current.path != url.path {
+      already = false
+      break
+    }
+  }
+  if already {
+    print("wallpaper-already-set")
+  } else {
+    print("wallpaper-differs")
+  }
+  exit(0)
+}
 guard mode == "apply" else {
   fputs("unknown wallpaper mode\n", stderr)
   exit(2)
@@ -1315,9 +1427,17 @@ for screen in NSScreen.screens {
 }
 exit(failed ? 1 : 0)
 EOF
+  local wallpaper_status=""
+  wallpaper_status="$(swift "${swift_file}" status "${wallpaper}" 2> /dev/null || true)"
+  if [[ "${wallpaper_status}" == *wallpaper-already-set* ]]; then
+    rm -f "${swift_file}"
+    log "Desktop wallpaper is already cloud.jpg. Skipping."
+    return 0
+  fi
   if ! swift "${swift_file}" apply "${wallpaper}"; then
     rm -f "${swift_file}"
     log "Unable to set the desktop wallpaper. Continuing."
+    record_failure "Desktop wallpaper"
     return 0
   fi
   rm -f "${swift_file}"
@@ -1353,7 +1473,9 @@ main() {
   install_vscodium_extensions
   install_browser_extensions
   install_hermes_skills
-  log "Done."
+  if ! report_install_result; then
+    exit 1
+  fi
 }
 
 if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -530,7 +530,7 @@ EOF
   [ "$(sort -u "${call_log}")" = "DOTFILES_DIR=${DOTFILES_DIR}" ]
 }
 
-function install_vscodium_extensions_propagates_child_failures { #@test
+function install_vscodium_extensions_records_child_failures_without_aborting { #@test
   local bin_dir="${BATS_TEST_TMPDIR}/bin"
   local extensions_script="${DOTFILES_DIR}/scripts/scripts/vscodium-install-extensions.sh"
   mkdir -p "${bin_dir}" "$(dirname "${extensions_script}")"
@@ -538,9 +538,11 @@ function install_vscodium_extensions_propagates_child_failures { #@test
   chmod +x "${bin_dir}/codium"
   printf '#!/usr/bin/env bash\nexit 7\n' > "${extensions_script}"
 
-  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | install_vscodium_extensions' _ "${INSTALLER}" "${DOTFILES_DIR}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; install_vscodium_extensions <<< "y"; echo NEXT_STEP_RAN; report_install_result' _ "${INSTALLER}" "${DOTFILES_DIR}"
 
-  [ "${status}" -eq 7 ]
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"NEXT_STEP_RAN"* ]]
+  [[ "${output}" == *"Failed: VSCodium extension install"* ]]
 }
 
 function setup_homebrew_maintenance_skips_when_files_are_missing { #@test
