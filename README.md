@@ -29,6 +29,7 @@ Small collection of utility bash scripts. Currently this repo includes a guided 
 - optionally enabling the dotfiles daily Homebrew maintenance LaunchAgent after stowing
 - installing secure SSH client defaults from the dotfiles `ssh` package when stow is enabled
 - optionally applying the dotfiles macOS performance and appearance profile
+- optionally installing Shottr and AltTab when they are missing, then setting Shottr area capture to Command-S and AltTab as the Command-Tab switcher
 - setting macOS default handlers for Helium, Microsoft Edge, and WezTerm
 - installing missing VSCodium extensions from the dotfiles extension list without removing user-added extensions
 - opening browser extension install pages for installed managed Chromium-family browsers
@@ -112,6 +113,7 @@ The test suite lives in `test/`, uses Bats, and sources the installer without ru
 - Optionally moves conflicting files and symlinks into `~/.dotfiles-backup/<timestamp>/`.
 - Prompts before loading the daily Homebrew maintenance LaunchAgent from the stowed `homebrew` package.
 - Prompts before applying macOS performance and appearance defaults.
+- Prompts before installing Shottr and AltTab and applying their shortcuts. A skipped Brewfile does not skip that install.
 - Skips optional app setup cleanly when required tools or apps are not installed.
 
 ## Notes

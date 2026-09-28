@@ -1208,6 +1208,42 @@ stow_packages() {
   fi
 }
 
+# Offer Shottr and AltTab even when the Brewfile step was skipped.
+setup_shottr_and_alttab() {
+  local config_script
+  local cask
+  config_script="$(script_path "configure-shottr-alttab.sh")"
+
+  if [[ ! -f "${config_script}" ]]; then
+    log "Shottr and AltTab config script not found at ${config_script}. Skipping."
+    return 0
+  fi
+
+  if ! confirm "Install Shottr and AltTab if needed, and set Command-S screenshots plus Command-Tab switching?"; then
+    log "Skipping Shottr and AltTab setup."
+    return 0
+  fi
+
+  ensure_brew_on_path
+  if ! command -v brew > /dev/null 2>&1; then
+    log "Homebrew not found. Skipping Shottr and AltTab install."
+  else
+    for cask in shottr alt-tab; do
+      if brew list --cask "${cask}" > /dev/null 2>&1; then
+        log "${cask} already installed. Skipping install."
+        continue
+      fi
+      if ! brew install --cask "${cask}"; then
+        log "Unable to install ${cask}. Continuing."
+      fi
+    done
+  fi
+
+  if ! DOTFILES_DIR="${TARGET_DIR}" bash "${config_script}"; then
+    log "Unable to apply Shottr and AltTab shortcuts. Continuing."
+  fi
+}
+
 main() {
   parse_args "$@"
   require_macos
@@ -1230,6 +1266,7 @@ main() {
   bootstrap_neovim
   setup_homebrew_maintenance
   setup_macos_performance_beauty
+  setup_shottr_and_alttab
   setup_app_defaults
   install_vscodium_extensions
   install_browser_extensions

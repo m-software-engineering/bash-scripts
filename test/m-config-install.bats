@@ -278,6 +278,72 @@ EOF
   [ ! -f "${call_log}" ]
 }
 
+function setup_shottr_and_alttab_skips_when_script_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run setup_shottr_and_alttab
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Shottr and AltTab config script not found"* ]]
+}
+
+function setup_shottr_and_alttab_declines_cleanly { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local scripts_dir="${TARGET_DIR}/scripts/scripts"
+  local call_log="${BATS_TEST_TMPDIR}/window-tools.log"
+  mkdir -p "${scripts_dir}"
+
+  cat > "${scripts_dir}/configure-shottr-alttab.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' > "${WINDOW_TOOLS_CALL_LOG}"
+EOF
+  chmod +x "${scripts_dir}/configure-shottr-alttab.sh"
+
+  export WINDOW_TOOLS_CALL_LOG="${call_log}"
+  run bash -c 'source "$1"; TARGET_DIR="$2"; printf "n\n" | setup_shottr_and_alttab' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping Shottr and AltTab setup."* ]]
+  [ ! -f "${call_log}" ]
+}
+
+function setup_shottr_and_alttab_installs_missing_casks_and_applies_shortcuts { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local scripts_dir="${TARGET_DIR}/scripts/scripts"
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local brew_log="${BATS_TEST_TMPDIR}/brew.log"
+  local call_log="${BATS_TEST_TMPDIR}/window-tools.log"
+  mkdir -p "${scripts_dir}" "${bin_dir}"
+
+  cat > "${scripts_dir}/configure-shottr-alttab.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'DOTFILES_DIR=%s\n' "${DOTFILES_DIR:-}" > "${WINDOW_TOOLS_CALL_LOG}"
+EOF
+  chmod +x "${scripts_dir}/configure-shottr-alttab.sh"
+
+  cat > "${bin_dir}/brew" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args=%s\n' "$*" >> "${BREW_CALL_LOG}"
+if [[ "$1" == "list" ]]; then
+  exit 1
+fi
+EOF
+  chmod +x "${bin_dir}/brew"
+
+  export WINDOW_TOOLS_CALL_LOG="${call_log}"
+  export BREW_CALL_LOG="${brew_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | setup_shottr_and_alttab' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Install Shottr and AltTab if needed, and set Command-S screenshots plus Command-Tab switching? [y/N]"* ]]
+  [[ "$(cat "${brew_log}")" == *"args=install --cask shottr"* ]]
+  [[ "$(cat "${brew_log}")" == *"args=install --cask alt-tab"* ]]
+  [[ "$(cat "${call_log}")" == *"DOTFILES_DIR=${TARGET_DIR}"* ]]
+}
+
 function bootstrap_neovim_skips_when_nvim_is_missing { #@test
   PATH="/usr/bin:/bin" run bootstrap_neovim
 
