@@ -278,6 +278,115 @@ EOF
   [ ! -f "${call_log}" ]
 }
 
+function setup_shottr_and_alttab_skips_when_script_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run setup_shottr_and_alttab
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Shottr and AltTab config script not found"* ]]
+}
+
+function setup_shottr_and_alttab_declines_cleanly { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local scripts_dir="${TARGET_DIR}/scripts/scripts"
+  local call_log="${BATS_TEST_TMPDIR}/window-tools.log"
+  mkdir -p "${scripts_dir}"
+
+  cat > "${scripts_dir}/configure-shottr-alttab.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' > "${WINDOW_TOOLS_CALL_LOG}"
+EOF
+  chmod +x "${scripts_dir}/configure-shottr-alttab.sh"
+
+  export WINDOW_TOOLS_CALL_LOG="${call_log}"
+  run bash -c 'source "$1"; TARGET_DIR="$2"; printf "n\n" | setup_shottr_and_alttab' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping Shottr and AltTab setup."* ]]
+  [ ! -f "${call_log}" ]
+}
+
+function setup_shottr_and_alttab_installs_missing_casks_and_applies_shortcuts { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local scripts_dir="${TARGET_DIR}/scripts/scripts"
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local brew_log="${BATS_TEST_TMPDIR}/brew.log"
+  local call_log="${BATS_TEST_TMPDIR}/window-tools.log"
+  mkdir -p "${scripts_dir}" "${bin_dir}"
+
+  cat > "${scripts_dir}/configure-shottr-alttab.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'DOTFILES_DIR=%s\n' "${DOTFILES_DIR:-}" > "${WINDOW_TOOLS_CALL_LOG}"
+EOF
+  chmod +x "${scripts_dir}/configure-shottr-alttab.sh"
+
+  cat > "${bin_dir}/brew" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args=%s\n' "$*" >> "${BREW_CALL_LOG}"
+if [[ "$1" == "list" ]]; then
+  exit 1
+fi
+EOF
+  chmod +x "${bin_dir}/brew"
+
+  export WINDOW_TOOLS_CALL_LOG="${call_log}"
+  export BREW_CALL_LOG="${brew_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | setup_shottr_and_alttab' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Install Shottr and AltTab if needed, and set Command-S screenshots plus Command-Tab switching? [y/N]"* ]]
+  [[ "$(cat "${brew_log}")" == *"args=install --cask shottr"* ]]
+  [[ "$(cat "${brew_log}")" == *"args=install --cask alt-tab"* ]]
+  [[ "$(cat "${call_log}")" == *"DOTFILES_DIR=${TARGET_DIR}"* ]]
+}
+
+function setup_desktop_wallpaper_skips_when_image_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run setup_desktop_wallpaper
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Wallpaper not found at ${TARGET_DIR}/images/images/cloud.jpg. Skipping."* ]]
+}
+
+function setup_desktop_wallpaper_declines_cleanly { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  mkdir -p "${TARGET_DIR}/images/images"
+  printf 'jpeg\n' > "${TARGET_DIR}/images/images/cloud.jpg"
+
+  run bash -c 'source "$1"; TARGET_DIR="$2"; printf "n\n" | setup_desktop_wallpaper' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping desktop wallpaper."* ]]
+}
+
+function setup_desktop_wallpaper_applies_cloud_jpg_on_every_display { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local swift_log="${BATS_TEST_TMPDIR}/swift.log"
+  mkdir -p "${TARGET_DIR}/images/images" "${bin_dir}"
+  printf 'jpeg\n' > "${TARGET_DIR}/images/images/cloud.jpg"
+
+  cat > "${bin_dir}/swift" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args=%s\n' "$*" >> "${SWIFT_CALL_LOG}"
+EOF
+  chmod +x "${bin_dir}/swift"
+
+  export SWIFT_CALL_LOG="${swift_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | setup_desktop_wallpaper' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Set cloud.jpg as the desktop wallpaper? [y/N]"* ]]
+  [[ "${output}" == *"Desktop wallpaper set to cloud.jpg."* ]]
+  [[ "$(cat "${swift_log}")" == *"apply ${TARGET_DIR}/images/images/cloud.jpg"* ]]
+}
+
 function bootstrap_neovim_skips_when_nvim_is_missing { #@test
   PATH="/usr/bin:/bin" run bootstrap_neovim
 
@@ -421,7 +530,7 @@ EOF
   [ "$(sort -u "${call_log}")" = "DOTFILES_DIR=${DOTFILES_DIR}" ]
 }
 
-function install_vscodium_extensions_propagates_child_failures { #@test
+function install_vscodium_extensions_records_child_failures_without_aborting { #@test
   local bin_dir="${BATS_TEST_TMPDIR}/bin"
   local extensions_script="${DOTFILES_DIR}/scripts/scripts/vscodium-install-extensions.sh"
   mkdir -p "${bin_dir}" "$(dirname "${extensions_script}")"
@@ -429,9 +538,11 @@ function install_vscodium_extensions_propagates_child_failures { #@test
   chmod +x "${bin_dir}/codium"
   printf '#!/usr/bin/env bash\nexit 7\n' > "${extensions_script}"
 
-  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | install_vscodium_extensions' _ "${INSTALLER}" "${DOTFILES_DIR}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; install_vscodium_extensions <<< "y"; echo NEXT_STEP_RAN; report_install_result' _ "${INSTALLER}" "${DOTFILES_DIR}"
 
-  [ "${status}" -eq 7 ]
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"NEXT_STEP_RAN"* ]]
+  [[ "${output}" == *"Failed: VSCodium extension install"* ]]
 }
 
 function setup_homebrew_maintenance_skips_when_files_are_missing { #@test
