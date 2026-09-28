@@ -344,6 +344,49 @@ EOF
   [[ "$(cat "${call_log}")" == *"DOTFILES_DIR=${TARGET_DIR}"* ]]
 }
 
+function setup_desktop_wallpaper_skips_when_image_is_missing { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+
+  run setup_desktop_wallpaper
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Wallpaper not found at ${TARGET_DIR}/images/images/cloud.jpg. Skipping."* ]]
+}
+
+function setup_desktop_wallpaper_declines_cleanly { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  mkdir -p "${TARGET_DIR}/images/images"
+  printf 'jpeg\n' > "${TARGET_DIR}/images/images/cloud.jpg"
+
+  run bash -c 'source "$1"; TARGET_DIR="$2"; printf "n\n" | setup_desktop_wallpaper' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Skipping desktop wallpaper."* ]]
+}
+
+function setup_desktop_wallpaper_applies_cloud_jpg_on_every_display { #@test
+  TARGET_DIR="${TEST_HOME}/dotfiles"
+  local bin_dir="${BATS_TEST_TMPDIR}/bin"
+  local swift_log="${BATS_TEST_TMPDIR}/swift.log"
+  mkdir -p "${TARGET_DIR}/images/images" "${bin_dir}"
+  printf 'jpeg\n' > "${TARGET_DIR}/images/images/cloud.jpg"
+
+  cat > "${bin_dir}/swift" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args=%s\n' "$*" >> "${SWIFT_CALL_LOG}"
+EOF
+  chmod +x "${bin_dir}/swift"
+
+  export SWIFT_CALL_LOG="${swift_log}"
+  PATH="${bin_dir}:${PATH}" run bash -c 'source "$1"; TARGET_DIR="$2"; printf "y\n" | setup_desktop_wallpaper' _ "${INSTALLER}" "${TARGET_DIR}"
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Set cloud.jpg as the desktop wallpaper? [y/N]"* ]]
+  [[ "${output}" == *"Desktop wallpaper set to cloud.jpg."* ]]
+  [[ "$(cat "${swift_log}")" == *"apply ${TARGET_DIR}/images/images/cloud.jpg"* ]]
+}
+
 function bootstrap_neovim_skips_when_nvim_is_missing { #@test
   PATH="/usr/bin:/bin" run bootstrap_neovim
 

@@ -1244,6 +1244,87 @@ setup_shottr_and_alttab() {
   fi
 }
 
+# Set the bundled cloud photo as the desktop picture on every display.
+setup_desktop_wallpaper() {
+  local wallpaper="${TARGET_DIR}/images/images/cloud.jpg"
+  local swift_file
+
+  if [[ ! -f "${wallpaper}" ]]; then
+    log "Wallpaper not found at ${wallpaper}. Skipping."
+    return 0
+  fi
+
+  if ! confirm "Set cloud.jpg as the desktop wallpaper?"; then
+    log "Skipping desktop wallpaper."
+    return 0
+  fi
+
+  if ! command -v swift > /dev/null 2>&1; then
+    log "swift not found. Skipping desktop wallpaper."
+    return 0
+  fi
+
+  swift_file="$(mktemp "${TMPDIR:-/tmp}/set-wallpaper.XXXXXX.swift")"
+  cat > "${swift_file}" << 'EOF'
+import AppKit
+import Foundation
+
+let args = CommandLine.arguments
+guard args.count >= 3 else {
+  fputs("usage: set-wallpaper.swift apply|check /path\n", stderr)
+  exit(2)
+}
+let mode = args[1]
+let path = args[2]
+let url = URL(fileURLWithPath: path)
+guard FileManager.default.fileExists(atPath: path) else {
+  fputs("wallpaper file missing\n", stderr)
+  exit(1)
+}
+guard let image = NSImage(contentsOf: url), image.isValid else {
+  fputs("wallpaper file is not a readable image\n", stderr)
+  exit(1)
+}
+if mode == "check" {
+  print("wallpaper-image-ok")
+  exit(0)
+}
+guard mode == "apply" else {
+  fputs("unknown wallpaper mode\n", stderr)
+  exit(2)
+}
+if NSScreen.screens.isEmpty {
+  fputs("no displays found\n", stderr)
+  exit(1)
+}
+var failed = false
+for screen in NSScreen.screens {
+  do {
+    try NSWorkspace.shared.setDesktopImageURL(
+      url,
+      for: screen,
+      options: [
+        .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+        .allowClipping: true,
+      ]
+    )
+  } catch {
+    fputs("unable to set wallpaper: \(error)\n", stderr)
+    failed = true
+  }
+}
+exit(failed ? 1 : 0)
+EOF
+  if ! swift "${swift_file}" apply "${wallpaper}"; then
+    rm -f "${swift_file}"
+    log "Unable to set the desktop wallpaper. Continuing."
+    return 0
+  fi
+  rm -f "${swift_file}"
+  log "Desktop wallpaper set to cloud.jpg."
+  return 0
+}
+
 main() {
   parse_args "$@"
   require_macos
@@ -1266,6 +1347,7 @@ main() {
   bootstrap_neovim
   setup_homebrew_maintenance
   setup_macos_performance_beauty
+  setup_desktop_wallpaper
   setup_shottr_and_alttab
   setup_app_defaults
   install_vscodium_extensions
