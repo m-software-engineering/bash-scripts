@@ -66,23 +66,49 @@ log() {
 
 INSTALL_FAILURES=""
 
-record_failure() {
+explain_failure() {
   local step="${1}"
-  INSTALL_FAILURES="${INSTALL_FAILURES}${step}"$'\n'
+  local happened="${2}"
+  local next="${3}"
+  INSTALL_FAILURES="${INSTALL_FAILURES}${step}"$'\x1f'"${happened}"$'\x1f'"${next}"$'\n'
   log "Failed: ${step}"
+  log "What happened: ${happened}"
+  log "What to do: ${next}"
+  log "Installer: continuing. Later steps still run. Re-run this installer after the fix; completed steps are skipped."
+}
+
+record_failure() {
+  explain_failure "${1}" \
+    "This accepted step failed. The command output above is the cause." \
+    "Fix the error printed above, then re-run this installer. Do not treat this step as installed."
+}
+
+stop_installer() {
+  local step="${1}"
+  local happened="${2}"
+  local next="${3}"
+  log "Failed: ${step}"
+  log "What happened: ${happened}"
+  log "What to do: ${next}"
+  log "Installer: stopped. Later steps were not run."
+  exit 1
 }
 
 report_install_result() {
   local step
+  local happened
+  local next
   if [[ -z "${INSTALL_FAILURES}" ]]; then
     log "Setup finished with no failed steps."
     return 0
   fi
 
-  log "Setup finished with failed steps. Re-run the installer; completed steps are skipped."
-  while IFS= read -r step; do
+  log "Setup finished with failed steps. Each item below names the cause and the next action. Re-run the installer after fixing them; completed steps are skipped."
+  while IFS=$'\x1f' read -r step happened next; do
     [[ -n "${step}" ]] || continue
     printf '  - %s\n' "${step}"
+    printf '    What happened: %s\n' "${happened}"
+    printf '    What to do: %s\n' "${next}"
   done <<< "${INSTALL_FAILURES}"
   return 1
 }
@@ -230,6 +256,9 @@ setup_context7_api_key() {
       set -x
     fi
     log "Unable to read the Context7 API key."
+    log "What happened: the hidden input read failed, so no key was stored. The existing key, if any, was not changed."
+    log "What to do: re-run this installer from a terminal that can accept hidden input."
+    log "Installer: stopped. Later steps were not run."
     return 1
   fi
   printf '\n'
@@ -240,6 +269,9 @@ setup_context7_api_key() {
       set -x
     fi
     log "Invalid Context7 API key format; expected a key beginning with ctx7sk- or ctx7sk_."
+    log "What happened: the typed value does not match the Context7 key format. The existing key, if any, was not changed."
+    log "What to do: re-run this installer and paste a key that starts with ctx7sk- or ctx7sk_."
+    log "Installer: stopped. Later steps were not run."
     return 1
   fi
 
@@ -251,10 +283,13 @@ setup_context7_api_key() {
       set -x
     fi
     log "Refusing to store the Context7 API key in a symlinked directory: ${env_dir}"
+    log "What happened: ${env_dir} is a symlink, so writing the key could follow it outside the intended directory. The existing key was not changed."
+    log "What to do: replace that symlink with a real directory owned by you, then re-run this installer."
+    log "Installer: stopped. Later steps were not run."
     return 1
   fi
 
-  (
+  if ! (
     umask 077
     mkdir -p "${env_dir}"
     chmod 700 "${env_dir}"
@@ -263,6 +298,7 @@ setup_context7_api_key() {
     temp_path="$(mktemp "${env_dir}/.context7.env.XXXXXX")"
     trap 'rm -f "${temp_path}"' EXIT
     if [[ ! -f "${temp_path}" || -L "${temp_path}" ]]; then
+      printf 'Context7 temporary file was missing or a symlink: %s\n' "${temp_path}" >&2
       exit 1
     fi
 
@@ -270,7 +306,17 @@ setup_context7_api_key() {
     chmod 600 "${temp_path}"
     mv -f "${temp_path}" "${env_path}"
     trap - EXIT
-  )
+  ); then
+    unset api_key
+    if [[ "${xtrace_was_enabled}" -eq 1 ]]; then
+      set -x
+    fi
+    log "Refusing to store the Context7 API key because the temporary file was missing or a symlink."
+    log "What happened: mktemp in ${env_dir} did not produce a regular file. The existing key, if any, was not changed."
+    log "What to do: remove any symlink matching ${env_dir}/.context7.env.* and re-run this installer."
+    log "Installer: stopped. Later steps were not run."
+    return 1
+  fi
   unset api_key
   if [[ "${xtrace_was_enabled}" -eq 1 ]]; then
     set -x
@@ -296,6 +342,9 @@ parse_args() {
       --dotfiles-dir)
         [[ "$#" -ge 2 ]] || {
           printf 'Missing value for %s\n' "$1" >&2
+          printf 'What happened: %s needs a value and none was given.\n' "$1" >&2
+          printf 'What to do: pass a path after %s, or run this installer with --help.\n' "$1" >&2
+          printf 'Installer: stopped. Later steps were not run.\n' >&2
           exit 1
         }
         TARGET_DIR="$2"
@@ -304,6 +353,9 @@ parse_args() {
       --repo-url)
         [[ "$#" -ge 2 ]] || {
           printf 'Missing value for %s\n' "$1" >&2
+          printf 'What happened: %s needs a value and none was given.\n' "$1" >&2
+          printf 'What to do: pass a path after %s, or run this installer with --help.\n' "$1" >&2
+          printf 'Installer: stopped. Later steps were not run.\n' >&2
           exit 1
         }
         REPO_URL="$2"
@@ -315,6 +367,9 @@ parse_args() {
         ;;
       *)
         printf 'Unknown option: %s\n' "$1" >&2
+        printf 'What happened: %s is not a supported flag.\n' "$1" >&2
+        printf 'What to do: run this installer with --help and use only the listed flags.\n' >&2
+        printf 'Installer: stopped. Later steps were not run.\n' >&2
         usage >&2
         exit 1
         ;;
@@ -325,6 +380,9 @@ parse_args() {
 require_macos() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     printf 'This installer is macOS-only.\n' >&2
+    printf 'What happened: uname -s is %s, not Darwin. No packages were installed.\n' "$(uname -s)" >&2
+    printf 'What to do: run this installer on the Mac it is meant to configure.\n' >&2
+    printf 'Installer: stopped. Later steps were not run.\n' >&2
     exit 1
   fi
 }
@@ -339,6 +397,10 @@ Do not run:
 
 Run instead:
   bash -c "\$(curl -fsSL ${SAFE_CURL_URL})"
+
+What happened: stdin or stdout is not a terminal, so the prompts cannot be answered.
+What to do: run the bash -c command above in Terminal.app or another TTY. Do not pipe this script to bash.
+Installer: stopped. Later steps were not run.
 EOF
     exit 1
   fi
@@ -398,7 +460,9 @@ repair_developer_dir_if_broken() {
     sudo xcode-select --switch /Library/Developer/CommandLineTools
   else
     log "Cannot continue with an invalid xcode-select developer directory."
-    exit 1
+    stop_installer "Xcode Command Line Tools" \
+      "xcode-select does not point at a directory, and the switch to /Library/Developer/CommandLineTools was declined." \
+      "Run: sudo xcode-select --switch /Library/Developer/CommandLineTools"
   fi
 }
 
@@ -425,7 +489,9 @@ install_clt_if_missing() {
   log "Xcode Command Line Tools are required for this installer."
   if ! confirm "Install Xcode Command Line Tools now?"; then
     log "Xcode Command Line Tools are required. Exiting."
-    exit 1
+    stop_installer "Xcode Command Line Tools" \
+      "git, clang, and the rest of this installer need the Command Line Tools, and the install was declined." \
+      "Run: xcode-select --install"
   fi
 
   log "Launching Xcode Command Line Tools installer."
@@ -436,15 +502,17 @@ install_clt_if_missing() {
   log "Waiting for Command Line Tools installation to complete."
   if ! wait_for_clt_install "${CLT_TIMEOUT_SECONDS}"; then
     log "Timed out waiting for Command Line Tools installation."
-    log "Finish the installation from the macOS prompt, then rerun this script."
-    exit 1
+    stop_installer "Xcode Command Line Tools" \
+      "Timed out waiting for Command Line Tools installation after ${CLT_TIMEOUT_SECONDS} seconds." \
+      "Finish the macOS installer prompt, then re-run this installer."
   fi
 }
 
 validate_clt() {
   if ! has_clt; then
-    log "Xcode Command Line Tools validation failed."
-    exit 1
+    stop_installer "Xcode Command Line Tools" \
+      "Xcode Command Line Tools validation failed. xcode-select -p or xcrun --find clang did not succeed." \
+      "Run: xcode-select -p && xcrun --find clang"
   fi
 
   local dev_dir
@@ -455,8 +523,9 @@ validate_clt() {
   log "clang found at: ${clang_path}"
 
   if ! git --version > /dev/null 2>&1; then
-    log "git command not available after CLT setup."
-    exit 1
+    stop_installer "git" \
+      "git command not available after CLT setup. clang may be present while git is still missing." \
+      "Run: xcode-select --install"
   fi
 }
 
@@ -473,13 +542,15 @@ clone_repo() {
     return 0
   fi
   if [[ -e "${TARGET_DIR}" ]]; then
-    log "Path ${TARGET_DIR} exists but is not a git repo. Please move it aside."
-    exit 1
+    stop_installer "Clone dotfiles repo" \
+      "Path ${TARGET_DIR} exists but is not a git repo. Clone cannot create it." \
+      "Move that path aside, then re-run this installer. Example: mv \"${TARGET_DIR}\" \"${TARGET_DIR}.aside\""
   fi
   if confirm "Clone dotfiles repo (${REPO_URL}) to ${TARGET_DIR}?"; then
     if ! git clone "${REPO_URL}" "${TARGET_DIR}"; then
-      record_failure "Clone dotfiles repo"
-      exit 1
+      stop_installer "Clone dotfiles repo" \
+        "git clone ${REPO_URL} ${TARGET_DIR} exited non-zero. The git output above is the cause. A partial directory may exist." \
+        "Fix the git error, remove a partial non-repo at ${TARGET_DIR} only if you do not need it, then re-run this installer."
     fi
   else
     log "Skipping clone."
@@ -495,12 +566,16 @@ install_homebrew() {
   if confirm "Install Homebrew?"; then
     require_sudo
     if ! eval "${BREW_INSTALL_CMD}"; then
-      record_failure "Homebrew install"
+      explain_failure "Homebrew install" \
+        "The Homebrew install command exited non-zero. brew is still not available. The install output above is the cause." \
+        "Run the Homebrew install from https://brew.sh in this terminal, then re-run this installer."
       return 0
     fi
     ensure_brew_on_path
     if ! command -v brew > /dev/null 2>&1; then
-      record_failure "Homebrew install did not put brew on PATH"
+      explain_failure "Homebrew install did not put brew on PATH" \
+        "The Homebrew install command finished, but brew is not on PATH. Checked /opt/homebrew/bin/brew and /usr/local/bin/brew." \
+        "Open a new terminal and run: command -v brew. If it prints a path, re-run this installer."
     fi
   else
     log "Skipping Homebrew install."
@@ -514,7 +589,9 @@ install_oh_my_zsh() {
   fi
   if confirm "Install Oh-My-Zsh?"; then
     if ! RUNZSH=no CHSH=no KEEP_ZSHRC=yes eval "${OMZ_INSTALL_CMD}"; then
-      record_failure "Oh-My-Zsh install"
+      explain_failure "Oh-My-Zsh install" \
+        "The Oh My Zsh install command exited non-zero. ${HOME}/.oh-my-zsh was not created. The install output above is the cause." \
+        "If a partial ${HOME}/.oh-my-zsh exists and is not a git repo, move it aside, then re-run this installer."
     fi
   else
     log "Skipping Oh-My-Zsh install."
@@ -536,7 +613,9 @@ install_omz_plugins() {
   else
     if confirm "Install zsh-autosuggestions?"; then
       if ! git clone https://github.com/zsh-users/zsh-autosuggestions "${autosuggest_dir}"; then
-        record_failure "zsh-autosuggestions install"
+        explain_failure "zsh-autosuggestions install" \
+          "git clone into ${autosuggest_dir} exited non-zero. The plugin was not installed." \
+          "Remove a partial directory at ${autosuggest_dir} if it is not a git repo, then re-run this installer."
       fi
     else
       log "Skipping zsh-autosuggestions."
@@ -548,7 +627,9 @@ install_omz_plugins() {
   else
     if confirm "Install zsh-completions?"; then
       if ! git clone https://github.com/zsh-users/zsh-completions.git "${completions_dir}"; then
-        record_failure "zsh-completions install"
+        explain_failure "zsh-completions install" \
+          "git clone into ${completions_dir} exited non-zero. The plugin was not installed." \
+          "Remove a partial directory at ${completions_dir} if it is not a git repo, then re-run this installer."
       fi
     else
       log "Skipping zsh-completions."
@@ -601,7 +682,9 @@ install_brew_bundle() {
   if confirm "Install Brewfile packages from ${brewfile}?"; then
     require_sudo
     if ! run_brew_bundle "${brewfile}"; then
-      record_failure "Brewfile install"
+      explain_failure "Brewfile install" \
+        "brew bundle --file ${brewfile} exited non-zero. Packages from that Brewfile may be only partly installed. The brew output above names the package." \
+        "Run: brew bundle --file ${brewfile}. Fix the package it names, then re-run this installer."
     fi
   else
     log "Skipping Brewfile install."
@@ -639,14 +722,16 @@ setup_homebrew_maintenance() {
 
   if confirm "Enable daily Homebrew maintenance LaunchAgent?"; then
     if ! launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
-      log "Unable to bootstrap Homebrew maintenance LaunchAgent. Continuing."
-      record_failure "Homebrew maintenance LaunchAgent"
+      explain_failure "Homebrew maintenance LaunchAgent" \
+        "launchctl bootstrap gui/$(id -u) ${plist_path} exited non-zero. Daily Homebrew maintenance was not loaded." \
+        "Run: launchctl print gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL}. Fix the error it prints, then re-run this installer."
       return 0
     fi
 
     if ! launchctl enable "gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL}"; then
-      log "Unable to enable Homebrew maintenance LaunchAgent. Continuing."
-      record_failure "Homebrew maintenance LaunchAgent"
+      explain_failure "Homebrew maintenance LaunchAgent" \
+        "launchctl enable gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL} exited non-zero. The agent was bootstrapped but not enabled." \
+        "Run: launchctl print gui/$(id -u)/${HOMEBREW_MAINTENANCE_LABEL}. Fix the error it prints, then re-run this installer."
       return 0
     fi
   else
@@ -675,7 +760,9 @@ setup_node_runtime() {
     log "mise is not installed."
     if confirm "Install mise with Homebrew now?"; then
       if ! brew install mise; then
-        record_failure "mise install"
+        explain_failure "mise install" \
+          "brew install mise exited non-zero. Node.js was not installed. The brew output above is the cause." \
+          "Run: brew install mise. Fix the brew error, then re-run this installer."
         return 0
       fi
     else
@@ -685,7 +772,9 @@ setup_node_runtime() {
   fi
 
   if ! command -v mise > /dev/null 2>&1; then
-    record_failure "mise install did not put mise on PATH"
+    explain_failure "mise install did not put mise on PATH" \
+      "brew install mise finished, but mise is not on PATH. Node.js was not configured." \
+      "Run: command -v mise. If it is missing, run brew --prefix mise and re-run this installer in a new terminal."
     return 0
   fi
 
@@ -693,7 +782,9 @@ setup_node_runtime() {
     log "Node.js is already installed with mise. Skipping Node.js LTS install."
   elif confirm "Install Node.js LTS with mise and set it as the global default?"; then
     if ! mise use --global node@lts; then
-      record_failure "Node.js LTS install"
+      explain_failure "Node.js LTS install" \
+        "mise use --global node@lts exited non-zero. The global Node default was not set. The mise output above is the cause." \
+        "Run: mise use --global node@lts. Fix the mise error, then re-run this installer."
     fi
   else
     log "Skipping Node.js LTS install."
@@ -703,8 +794,9 @@ setup_node_runtime() {
     log "mise already reads .nvmrc and .node-version. Skipping."
   elif confirm "Enable mise support for .nvmrc and .node-version files?"; then
     if ! mise settings add idiomatic_version_file_enable_tools node; then
-      log "Unable to update mise idiomatic Node version file setting. Continuing."
-      record_failure "mise idiomatic Node version files"
+      explain_failure "mise idiomatic Node version files" \
+        "mise settings add idiomatic_version_file_enable_tools node exited non-zero. .nvmrc and .node-version will not select Node." \
+        "Run: mise settings add idiomatic_version_file_enable_tools node. Fix the mise error, then re-run this installer."
     fi
   else
     log "Skipping mise idiomatic Node version file support."
@@ -746,7 +838,9 @@ setup_app_defaults() {
 
   if confirm "Set Helium as browser, Microsoft Edge as PDF reader, and WezTerm as terminal handler?"; then
     if ! DOTFILES_DIR="${TARGET_DIR}" bash "${defaults_script}"; then
-      record_failure "Default app setup"
+      explain_failure "Default app setup" \
+        "${defaults_script} exited non-zero. Helium, Edge, or WezTerm may not be the default handler. The script output above is the cause." \
+        "Run: DOTFILES_DIR=${TARGET_DIR} bash ${defaults_script}. Fix the duti error, then re-run this installer."
     fi
   else
     log "Skipping default app setup."
@@ -765,7 +859,9 @@ setup_macos_performance_beauty() {
 
   if confirm "Apply macOS performance and appearance defaults from dotfiles?"; then
     if ! DOTFILES_DIR="${TARGET_DIR}" bash "${tuning_script}"; then
-      record_failure "macOS performance and appearance defaults"
+      explain_failure "macOS performance and appearance defaults" \
+        "${tuning_script} exited non-zero. Light appearance and the other defaults in that script may be only partly applied. The script output above is the cause." \
+        "Run: DOTFILES_DIR=${TARGET_DIR} bash ${tuning_script}. Fix the defaults error, then re-run this installer."
     fi
   else
     log "Skipping macOS performance and appearance defaults."
@@ -791,7 +887,9 @@ bootstrap_neovim() {
       log "LazyVim plugins synced."
     else
       log "LazyVim plugin bootstrap failed. Run nvim once to finish installation."
-      record_failure "LazyVim plugin bootstrap"
+      explain_failure "LazyVim plugin bootstrap" \
+        "nvim --headless '+Lazy! sync' +qa exited non-zero. LazyVim plugin bootstrap failed. Plugin sources may be incomplete." \
+        "Open nvim once and finish the Lazy install from the error it prints, then re-run this installer."
     fi
   else
     log "Skipping LazyVim plugin bootstrap."
@@ -816,7 +914,9 @@ install_vscodium_extensions() {
 
   if confirm "Install missing VSCodium extensions from dotfiles?"; then
     if ! DOTFILES_DIR="${TARGET_DIR}" bash "${extensions_script}"; then
-      record_failure "VSCodium extension install"
+      explain_failure "VSCodium extension install" \
+        "${extensions_script} exited non-zero. Some extensions from the dotfiles list may be missing. The script output above is the cause." \
+        "Run: DOTFILES_DIR=${TARGET_DIR} bash ${extensions_script}. Fix the codium error, then re-run this installer."
     fi
   else
     log "Skipping VSCodium extension install."
@@ -869,7 +969,9 @@ install_browser_extensions() {
       [[ -n "${url}" ]] || continue
       [[ "${url}" == \#* ]] && continue
       if ! open -a "${app_path}" "${url}"; then
-        record_failure "Open browser extension page in ${label}"
+        explain_failure "Open browser extension page in ${label}" \
+          "open -a ${app_path} ${url} exited non-zero. That extension page was not opened." \
+          "Open ${url} in ${label} yourself. The other extension pages still open."
       fi
       sleep 0.15
     done < "${urls_file}"
@@ -968,6 +1070,8 @@ install_ai_memory_release() {
   local dest
   if ! asset="$(ai_memory_macos_asset)"; then
     log "Unsupported architecture for the ai-memory macOS release: $(uname -m)"
+    log "What happened: the published release has no archive for this CPU. ai-memory was not installed."
+    log "What to do: use an arm64 or x86_64 Mac, or install ai-memory by another method, then re-run this installer."
     return 1
   fi
   stage="$(mktemp -d "${TMPDIR:-/tmp}/ai-memory.XXXXXX")"
@@ -975,11 +1079,15 @@ install_ai_memory_release() {
   if ! curl -fsSL "${AI_MEMORY_RELEASE_BASE}/${asset}" -o "${archive}"; then
     rm -rf "${stage}"
     log "Unable to download the ai-memory release."
+    log "What happened: curl could not download ${AI_MEMORY_RELEASE_BASE}/${asset}. The partial download was deleted."
+    log "What to do: check the network, then re-run this installer."
     return 1
   fi
   if ! curl -fsSL "${AI_MEMORY_RELEASE_BASE}/${asset}.sha256" -o "${archive}.sha256"; then
     rm -rf "${stage}"
     log "Unable to download the ai-memory checksum."
+    log "What happened: the archive downloaded, but its sibling .sha256 file did not. Both were deleted. The binary was not installed."
+    log "What to do: re-run this installer when ${AI_MEMORY_RELEASE_BASE}/${asset}.sha256 is reachable."
     return 1
   fi
   expected="$(awk 'NR == 1 { print $1 }' "${archive}.sha256")"
@@ -987,17 +1095,23 @@ install_ai_memory_release() {
   if [[ -z "${expected}" || "${actual}" != "${expected}" ]]; then
     rm -rf "${stage}"
     log "ai-memory checksum mismatch. Refusing to install."
+    log "What happened: the downloaded archive hash does not match the published checksum. The archive was deleted."
+    log "What to do: re-run this installer when the release download is intact. Do not install that archive by hand."
     return 1
   fi
   mkdir -p "${stage}/extract"
   if ! tar -xzf "${archive}" -C "${stage}/extract"; then
     rm -rf "${stage}"
     log "Unable to extract the ai-memory release."
+    log "What happened: tar could not extract the archive. The download was deleted. The binary was not installed."
+    log "What to do: re-run this installer. If it fails again, the release archive is not a gzip tar."
     return 1
   fi
   if ! extract_root="$(ai_memory_extract_root "${stage}/extract")"; then
     rm -rf "${stage}"
     log "ai-memory release did not contain the expected binary."
+    log "What happened: the archive extracted, but it had no executable ai-memory file. The download was deleted."
+    log "What to do: re-run this installer after the release layout is the expected macOS archive."
     return 1
   fi
   dest="${HOME}/Applications/ai-memory"
@@ -1027,7 +1141,9 @@ init_ai_memory_if_needed() {
   fi
   if ! "${binary}" init; then
     log "ai-memory init failed. Continuing."
-    record_failure "ai-memory init"
+    explain_failure "ai-memory init" \
+      "${binary} init exited non-zero. The data directory ${data_dir} was not created. The command output above is the cause." \
+      "Run: ${binary} init. Fix the error it prints, then re-run this installer."
     return 0
   fi
   log "ai-memory data directory initialized."
@@ -1060,7 +1176,9 @@ setup_ai_memory_launchd() {
   sed -e "s|__AI_MEMORY_BIN__|${binary}|g" -e "s|__HOME__|${HOME}|g" "${template}" > "${plist_path}"
   if ! launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
     log "Unable to bootstrap the ai-memory LaunchAgent. Continuing."
-    record_failure "ai-memory LaunchAgent"
+    explain_failure "ai-memory LaunchAgent" \
+      "launchctl bootstrap gui/$(id -u) ${plist_path} exited non-zero. ai-memory will not start at login." \
+      "Run: launchctl print gui/$(id -u)/${AI_MEMORY_LAUNCHD_LABEL}. Fix the error it prints, then re-run this installer."
     return 0
   fi
   log "ai-memory LaunchAgent loaded."
@@ -1079,7 +1197,9 @@ install_ai_memory() {
     fi
     if ! install_ai_memory_release; then
       log "ai-memory install failed. Continuing."
-      record_failure "ai-memory install"
+      explain_failure "ai-memory install" \
+        "The ai-memory release was not installed. The line above names the cause: download, checksum mismatch, extract, or a missing binary. Nothing from that release was left in place." \
+        "Re-run this installer after the network or checksum error is fixed. Do not use a partial tree under ${HOME}/Applications/ai-memory."
       return 0
     fi
     ensure_ai_memory_symlink
@@ -1111,12 +1231,16 @@ install_rtk() {
   fi
   if ! brew install rtk; then
     log "RTK Homebrew install failed. Continuing."
-    record_failure "RTK install"
+    explain_failure "RTK install" \
+      "brew install rtk exited non-zero. The rtk-ai token killer was not installed. The brew output above is the cause." \
+      "Run: brew install rtk. Do not cargo install rtk; that can install a different project. Then confirm: rtk gain --help"
     return 0
   fi
   if ! rtk_is_token_killer; then
     log "Installed rtk does not provide rtk gain. This is not the rtk-ai token killer. Continuing."
-    record_failure "RTK install"
+    explain_failure "RTK install" \
+      "Installed rtk does not provide rtk gain. This is not the rtk-ai token killer. Continuing." \
+      "Run: brew uninstall rtk, then brew install rtk, then rtk gain --help. Do not cargo install rtk."
     return 0
   fi
   log "RTK token killer installed."
@@ -1150,7 +1274,9 @@ install_hermes_skills() {
     fi
     if ! hermes skills install "${identifier}" --yes; then
       log "Unable to install Hermes skill ${name}. Continuing."
-      record_failure "Hermes skill ${name}"
+      explain_failure "Hermes skill ${name}" \
+        "hermes skills install ${identifier} --yes exited non-zero. Skill ${name} is not installed. The hermes output above is the cause." \
+        "Run: hermes skills install ${identifier} --yes. Fix the hermes error, then re-run this installer."
     fi
   done
 }
@@ -1257,7 +1383,9 @@ stow_packages() {
     if [[ "${dry_status}" -ne 0 && "${has_conflicts}" -eq 0 ]]; then
       log "Stow dry-run failed without a recognized conflict. Skipping stow."
       printf '%s\n' "${dry_output}"
-      record_failure "Stow dry-run"
+      explain_failure "Stow dry-run" \
+        "stow -n exited ${dry_status} and the output was not a recognized conflict. No packages were linked. The stow output above is the cause." \
+        "Fix the path named in that output, then re-run this installer."
       return 0
     fi
 
@@ -1269,11 +1397,15 @@ stow_packages() {
         timestamp="$(date +%Y%m%d-%H%M%S)"
         if backup_stow_conflicts "${dry_output}" "${HOME}/.dotfiles-backup/${timestamp}"; then
           if ! stow -v "${stow_args[@]}"; then
-            record_failure "Stow packages"
+            explain_failure "Stow packages" \
+              "stow exited non-zero after the conflicting files were moved aside. Some packages may still be unlinked. The stow output above is the cause." \
+              "Run the same stow command and fix the path it names, then re-run this installer. Moved files are under ${HOME}/.dotfiles-backup."
           fi
         else
           log "Skipping stow because conflicts could not be backed up safely."
-          record_failure "Stow conflict backup"
+          explain_failure "Stow conflict backup" \
+            "Stow found conflicts, but those paths could not be moved to ${HOME}/.dotfiles-backup safely. Nothing was overwritten." \
+            "Move the conflicting files named in the stow output above, then re-run this installer."
         fi
       else
         log "Skipping stow due to conflicts."
@@ -1289,7 +1421,9 @@ stow_packages() {
     log "Dry-run looks clean."
     if confirm "Proceed with stow?"; then
       if ! stow -v "${stow_args[@]}"; then
-        record_failure "Stow packages"
+        explain_failure "Stow packages" \
+          "stow exited non-zero after a clean dry-run. Some packages may be unlinked. The stow output above is the cause." \
+          "Run the same stow command and fix the path it names, then re-run this installer."
       fi
     else
       log "Skipping stow."
@@ -1325,15 +1459,17 @@ setup_shottr_and_alttab() {
         continue
       fi
       if ! brew install --cask "${cask}"; then
-        log "Unable to install ${cask}. Continuing."
-        record_failure "${cask} install"
+        explain_failure "${cask} install" \
+          "brew install --cask ${cask} exited non-zero. That app was not installed. The brew output above is the cause." \
+          "Run: brew install --cask ${cask}. Fix the brew error, then re-run this installer."
       fi
     done
   fi
 
   if ! DOTFILES_DIR="${TARGET_DIR}" bash "${config_script}"; then
-    log "Unable to apply Shottr and AltTab shortcuts. Continuing."
-    record_failure "Shottr and AltTab shortcuts"
+    explain_failure "Shottr and AltTab shortcuts" \
+      "${config_script} exited non-zero. Command-S or Command-Tab may still be the system shortcut. The script output above is the cause." \
+      "Run: DOTFILES_DIR=${TARGET_DIR} bash ${config_script}. Shottr needs Screen Recording. AltTab needs Accessibility and a relaunch before Command-Tab changes."
   fi
 }
 
@@ -1437,7 +1573,9 @@ EOF
   if ! swift "${swift_file}" apply "${wallpaper}"; then
     rm -f "${swift_file}"
     log "Unable to set the desktop wallpaper. Continuing."
-    record_failure "Desktop wallpaper"
+    explain_failure "Desktop wallpaper" \
+      "AppKit could not set ${wallpaper} as the desktop picture. System Events is not used because picture of desktop fails on this macOS. The swift output above is the cause." \
+      "Confirm ${wallpaper} is a readable image, then re-run this installer and accept the wallpaper prompt."
     return 0
   fi
   rm -f "${swift_file}"

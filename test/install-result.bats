@@ -21,6 +21,19 @@ function recorded_failure_is_listed_and_exits_nonzero { #@test
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Failed: Brewfile install"* ]]
   [[ "${output}" == *"  - Brewfile install"* ]]
+  [[ "${output}" == *"What happened:"* ]]
+  [[ "${output}" == *"What to do:"* ]]
+}
+
+function stop_installer_names_the_cause_and_says_later_steps_did_not_run { #@test
+  run bash -c 'source "$1"; stop_installer "Clone dotfiles repo" "Path /tmp/dotfiles exists but is not a git repo." "Move that path aside, then re-run this installer."' _ "${INSTALLER}"
+
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Failed: Clone dotfiles repo"* ]]
+  [[ "${output}" == *"What happened: Path /tmp/dotfiles exists but is not a git repo."* ]]
+  [[ "${output}" == *"What to do: Move that path aside, then re-run this installer."* ]]
+  [[ "${output}" == *"Installer: stopped. Later steps were not run."* ]]
+  [[ "${output}" != *"Installer: continuing."* ]]
 }
 
 function declined_step_is_not_a_failure { #@test
@@ -47,7 +60,8 @@ function accepted_step_failure_continues_and_is_reported { #@test
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"NEXT_STEP_RAN"* ]]
   [[ "${output}" == *"Failed: macOS performance and appearance defaults"* ]]
-  [[ "${output}" == *"  - macOS performance and appearance defaults"* ]]
+  [[ "${output}" == *"What to do: Run: DOTFILES_DIR=${TARGET_DIR} bash ${TARGET_DIR}/scripts/scripts/macos-performance-beauty.sh"* ]]
+  [[ "${output}" == *"Installer: continuing."* ]]
 }
 
 function brewfile_failure_is_recorded_without_aborting_the_caller { #@test
